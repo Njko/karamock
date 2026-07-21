@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 1 — TabView et l'écran Découvrir</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 1 · Squelette de l'app</p>
+  <h1>TabView et l'écran "Découvrir"</h1>
+  <p class="subtitle">Ta première vraie ligne de SwiftUI dans un vrai projet Xcode. On construit la barre d'onglets et l'écran d'accueil avec sa première rangée de playlists.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> tu connais déjà <code>@State</code>/<code>@Binding</code> en théorie, mais tu n'as jamais posé les composants d'écran concrets — <code>TabView</code>, <code>NavigationStack</code>, <code>ScrollView</code> — dans un projet qui build. C'est le premier morceau tangible de <a href="../MISSION.md">MISSION.md</a> : un écran qui tourne, qu'on peut comparer à la vraie app.
+  </div>
+
+  <figure class="shot">
+    <img src="../reference/screenshots/01-decouvrir.png" alt="Écran Découvrir de l'app KaraFun, avec les sections Playlists, Quiz et Styles">
+    <figcaption>Ce qu'on reproduit dans cette leçon : le titre "Découvrir" et la rangée horizontale "Playlists". Les sections Quiz/Styles suivront dans une prochaine leçon (même pattern, données différentes).</figcaption>
+  </figure>
+
+  <h2>Étape 0 — créer le projet Xcode (sur ton Mac)</h2>
+  <ol>
+    <li>Clone <code>https://github.com/Njko/karamock</code> sur ton Mac.</li>
+    <li>Dans Xcode : <strong>File → New → Project… → iOS → App</strong>.</li>
+    <li>Interface : <strong>SwiftUI</strong>. Langage : <strong>Swift</strong>. Décoche Core Data et Include Tests (on les ajoutera plus tard si besoin).</li>
+    <li>Nom du projet : <code>KaramockApp</code>. Enregistre-le dans un sous-dossier <code>ios/</code> à la racine du dépôt cloné, pour garder le contenu pédagogique (<code>lessons/</code>, <code>reference/</code>…) séparé du code Xcode.</li>
+  </ol>
+  <p>Xcode a généré un fichier <code>KaramockAppApp.swift</code> avec un <code>@main</code> et une <code>ContentView</code> vide. On va remplacer <code>ContentView</code> par notre barre d'onglets.</p>
+
+  <h2><code>TabView</code> — la barre d'onglets déclarative</h2>
+  <p>En UIKit, une barre d'onglets est un <code>UITabBarController</code> auquel tu assignes un tableau de <code>viewControllers</code>, chacun configurant sa propre propriété <code>tabBarItem</code>. En SwiftUI, <code>TabView</code> est une <code>View</code> comme une autre : elle prend en paramètre implicite (via <code>@ViewBuilder</code>) la liste des écrans, et chaque écran décrit son propre onglet avec le modificateur <code>.tabItem</code>.</p>
+
+  <pre><code>struct RootTabView: View {
+    var body: some View {
+        TabView {
+            DiscoverView()
+                .tabItem {
+                    Label("Découvrir", systemImage: "book.closed.fill")
+                }
+
+            LibraryView()
+                .tabItem {
+                    Label("Bibliothèque", systemImage: "music.note.list")
+                }
+        }
+    }
+}
+
+struct LibraryView: View {
+    var body: some View {
+        Text("Bibliothèque — à venir")
+    }
+}</code></pre>
+
+  <p><code>Label(_:systemImage:)</code> combine un texte et une icône <a href="https://developer.apple.com/sf-symbols/">SF Symbols</a> (le catalogue d'icônes vectorielles fournies par Apple — cherche un nom dans l'app SF Symbols, gratuite sur le Mac App Store). Remplace le contenu de <code>ContentView.swift</code> par <code>RootTabView</code>, et pointe <code>KaramockAppApp.swift</code> vers <code>RootTabView()</code> au lieu de <code>ContentView()</code>.</p>
+
+  <h2><code>NavigationStack</code> et le grand titre</h2>
+  <p>Équivalent déclaratif d'un <code>UINavigationController</code>. Le modificateur <code>.navigationTitle</code> remplace l'assignation à <code>navigationItem.title</code> — et contrairement à UIKit, le style "grand titre" (comme "Découvrir" en gros dans la capture) est le comportement par défaut, sans avoir à activer <code>prefersLargeTitles</code>.</p>
+
+  <pre><code>struct DiscoverView: View {
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    PlaylistSection(playlists: mockPlaylists)
+                }
+                .padding(.top)
+            }
+            .navigationTitle("Découvrir")
+        }
+    }
+}</code></pre>
+
+  <h2>La rangée horizontale de playlists</h2>
+  <p>Le plus proche en UIKit serait un <code>UICollectionView</code> avec un <code>UICollectionViewFlowLayout</code> en <code>scrollDirection = .horizontal</code>. En SwiftUI : un <code>ScrollView(.horizontal)</code> contenant un <code>LazyHStack</code>.</p>
+
+  <pre><code>struct Playlist: Identifiable {
+    let id = UUID()
+    let title: String
+    let gradientColors: [Color]
+}
+
+let mockPlaylists: [Playlist] = [
+    Playlist(title: "Best Of", gradientColors: [.orange, .pink]),
+    Playlist(title: "Années 2000\nen France", gradientColors: [.blue, .red]),
+    Playlist(title: "Karaoké\nClassics", gradientColors: [.yellow, .brown])
+]
+
+struct PlaylistSection: View {
+    let playlists: [Playlist]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Playlists", systemImage: "pencil.tip")
+                .font(.title3.bold())
+                .padding(.horizontal)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 14) {
+                    ForEach(playlists) { playlist in
+                        PlaylistCard(playlist: playlist)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+}
+
+struct PlaylistCard: View {
+    let playlist: Playlist
+
+    var body: some View {
+        LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            .frame(width: 150, height: 150)
+            .overlay(alignment: .bottomLeading) {
+                Text(playlist.title)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .padding(10)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}</code></pre>
+
+  <p><code>ForEach(playlists)</code> exige que <code>Playlist</code> soit <code>Identifiable</code> (une propriété <code>id</code> stable) — c'est ce qui permet à SwiftUI de savoir quelle carte correspond à quelle donnée quand la liste change, un peu comme un diffable data source en UIKit, mais sans tout l'appareillage à mettre en place toi-même.</p>
+
+  <details class="aside">
+    <summary>Pourquoi <code>LazyHStack</code> et pas juste <code>HStack</code> ?</summary>
+    <p>Un <code>HStack</code> classique construit <strong>toutes</strong> ses vues enfants immédiatement, même celles hors écran. <code>LazyHStack</code> ne construit que ce qui est visible (plus une petite marge), et construit le reste au fur et à mesure du scroll. Avec 3 cartes ça ne change rien ; avec 50 chansons dans une bibliothèque, ça évite de tout construire d'un coup — l'esprit est proche de la réutilisation de cellules d'un <code>UICollectionView</code>, même si le mécanisme sous-jacent diffère.</p>
+  </details>
+
+  <h2>Table de traduction UIKit → SwiftUI (compléments)</h2>
+  <table class="compare-table">
+    <tr><th>UIKit</th><th>SwiftUI</th></tr>
+    <tr><td><code>UITabBarController</code> + <code>tabBarItem</code></td><td><code>TabView</code> + <code>.tabItem</code></td></tr>
+    <tr><td><code>UINavigationController</code></td><td><code>NavigationStack</code></td></tr>
+    <tr><td><code>navigationItem.title</code> + <code>prefersLargeTitles</code></td><td><code>.navigationTitle(_:)</code> (grand titre par défaut)</td></tr>
+    <tr><td><code>UICollectionView</code> horizontal + cell reuse</td><td><code>ScrollView(.horizontal)</code> + <code>LazyHStack</code></td></tr>
+    <tr><td>Diffable data source (<code>UITableDiffableDataSource</code>)</td><td><code>ForEach</code> sur un type <code>Identifiable</code></td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    Le tutoriel officiel <a href="https://developer.apple.com/tutorials/swiftui">"SwiftUI Tutorials" (Landmarks)</a> construit un projet complet et couvre <code>NavigationStack</code> et les listes en situation réelle — fais-en au moins le premier chapitre avant la prochaine leçon. Doc de référence : <a href="https://developer.apple.com/documentation/swiftui/tabview"><code>TabView</code></a>, <a href="https://developer.apple.com/documentation/swiftui/navigationstack"><code>NavigationStack</code></a>, <a href="https://developer.apple.com/documentation/swiftui/scrollview"><code>ScrollView</code></a>.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Quel modificateur donne à un onglet de <code>TabView</code> son titre et son icône ?</p>
+    <label><input type="radio" name="q1" value="a"> .navigationTitle</label>
+    <label><input type="radio" name="q1" value="b"> .tabItem</label>
+    <label><input type="radio" name="q1" value="c"> .toolbar</label>
+    <label><input type="radio" name="q1" value="d"> .badge</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">2. Quel est l'équivalent SwiftUI le plus proche d'un <code>UINavigationController</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> TabView</label>
+    <label><input type="radio" name="q2" value="b"> ScrollView</label>
+    <label><input type="radio" name="q2" value="c"> NavigationStack</label>
+    <label><input type="radio" name="q2" value="d"> List</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi <code>Playlist</code> doit-elle être <code>Identifiable</code> pour être utilisée dans un <code>ForEach</code> ?</p>
+    <label><input type="radio" name="q3" value="a"> Pour que SwiftUI sache faire correspondre chaque vue à sa donnée quand la liste change</label>
+    <label><input type="radio" name="q3" value="b"> Parce que <code>ScrollView</code> l'exige explicitement</label>
+    <label><input type="radio" name="q3" value="c"> Pour permettre le tri alphabétique automatique</label>
+    <label><input type="radio" name="q3" value="d"> Ce n'est pas nécessaire, c'est optionnel</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="lazyhstack|lazy hstack">
+    <p class="quiz-question">4. Quel conteneur utiliser à la place de <code>HStack</code> pour ne construire que les cartes visibles à l'écran dans un scroll horizontal ?</p>
+    <input type="text" placeholder="…">
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le build échoue, un modificateur ne fait pas ce que tu attends, ou tu veux ajouter la section Quiz/Styles tout de suite ? Demande à ton agent — colle l'erreur Xcode telle quelle, ça aide à diagnostiquer.</p>
+
+  <div class="lesson-nav">
+    <span></span>
+    <span>Leçon suivante : la fiche chanson (Karaoké/Battle, tonalité/tempo) — à venir</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
