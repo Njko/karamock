@@ -19,7 +19,7 @@ struct SongSheet: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                //SongHeader(song: Song)
+                SongHeader(song: song)
                 
                 VStack(spacing: 12) {
                     ForEach(KaraokeMode.allCases) { option in

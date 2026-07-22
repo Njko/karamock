@@ -15,8 +15,12 @@ struct DiscoveryView: View {
                     PlaylistSection(playlists: mockPlaylist)
                     
                 }
+                .padding(.top)
             }
             .navigationTitle("Découvrir")
+            .navigationDestination(for: Playlist.self) { playlist in
+                PlaylistDetailView(playlist:playlist)
+            }
         }
     }
 }

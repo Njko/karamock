@@ -19,7 +19,10 @@ struct PlaylistSection: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 14) {
                     ForEach(playlists) { playlist in
-                        PlaylistCard(playlist: playlist)
+                        NavigationLink(value:playlist) {
+                            PlaylistCard(playlist: playlist)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal)
