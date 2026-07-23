@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 5 — Paroles simulées et défilement synchronisé</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 5 · État dérivé et Combine</p>
+  <h1>Paroles simulées et défilement synchronisé</h1>
+  <p class="subtitle">Le lecteur plein écran de la Leçon 4 a des contrôles, mais pas de paroles — la pièce maîtresse d'un lecteur karaoké. On simule une progression de lecture avec Combine, et on en dérive tout le reste : la ligne surlignée, le défilement automatique, le temps écoulé.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> <a href="../MISSION.md">MISSION.md</a> décrit explicitement l'objectif comme "lecteur plein écran avec <strong>paroles simulées</strong> et mini-lecteur persistant" — la Leçon 4 n'a couvert que la seconde moitié. C'est aussi l'occasion de mettre en pratique un principe que tu connais déjà en théorie (état dérivé plutôt que dupliqué) sur un cas concret où la tentation de multiplier les <code>@State</code> est grande.
+  </div>
+
+  <figure class="shot">
+    <img src="../reference/screenshots/04-lecteur-plein-ecran.png" alt="Lecteur plein écran de l'app KaraFun avec paroles affichées et ligne en cours surlignée">
+    <figcaption>Ce qu'on ajoute au lecteur de la Leçon 4 : le bloc de paroles, avec la ligne en cours mise en valeur et le défilement qui la garde toujours visible.</figcaption>
+  </figure>
+
+  <h2>Petite correction avant de commencer : "Jouer maintenant" ne lançait pas vraiment la lecture</h2>
+  <p>En Leçon 4, le bouton posait <code>player.currentSong</code> et ouvrait le plein écran, mais oubliait de passer <code>isPlaying</code> à <code>true</code> — la chanson s'ouvrait donc en pause. Un oubli d'une ligne dans <code>SongOptionsSheet</code> :</p>
+  <pre><code>Button("Jouer maintenant") {
+    player.currentSong = song
+    player.isPlaying = true       // ← ligne manquante en Leçon 4
+    player.isExpanded = true
+    dismiss()
+}</code></pre>
+
+  <h2>Simuler une progression avec Combine : <code>Timer.publish</code></h2>
+  <p>Toi qui viens de RxSwift, ceci va te sembler familier : <code>Timer.publish(every:on:in:).autoconnect()</code> est l'équivalent Combine (le framework réactif d'Apple, cousin direct de RxSwift) d'un <code>Observable&lt;Int&gt;.interval(_:scheduler:)</code>. Un flux de valeurs, émis à intervalle régulier, auquel on s'abonne — sauf qu'ici l'abonnement se fait avec <code>.onReceive</code>, directement sur une vue SwiftUI, et se termine tout seul quand la vue disparaît (pas de <code>dispose()</code>/<code>DisposeBag</code> à gérer manuellement).</p>
+
+  <pre><code>struct FullScreenPlayerView: View {
+    @Environment(PlayerState.self) private var player
+    @Environment(\.dismiss) private var dismiss
+    let song: Song
+
+    @State private var progress: TimeInterval = 0
+    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(spacing: 24) {
+            // ... chevron, pochette, titre/artiste inchangés (Leçon 4)
+
+            LyricsView(lyrics: mockLyrics, currentTime: progress)
+                .frame(height: 160)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Slider(value: $progress, in: 0...song.durationInSeconds)
+                HStack {
+                    Text(formatTime(progress))
+                    Spacer()
+                    Text("-" + formatTime(song.durationInSeconds - progress))
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            // ... contrôles de lecture inchangés (Leçon 4)
+        }
+        .padding()
+        .onReceive(timer) { _ in
+            guard player.isPlaying, progress < song.durationInSeconds else { return }
+            progress += 0.5
+        }
+    }
+}</code></pre>
+
+  <p>En Leçon 4, le slider était figé (<code>.constant(0.35)</code>) faute de valeur réelle à lui donner. Maintenant <code>progress</code> est un vrai <code>@State</code>, alimenté par le timer <em>et</em> modifiable directement par l'utilisateur en faisant glisser le slider — les deux écritures convergent vers la même source de vérité, sans code supplémentaire.</p>
+
+  <h3>Deux petits utilitaires</h3>
+  <pre><code>extension Song {
+    var durationInSeconds: TimeInterval {
+        let parts = duration.split(separator: ":").compactMap { Double($0) }
+        guard parts.count == 2 else { return 0 }
+        return parts[0] * 60 + parts[1]
+    }
+}
+
+func formatTime(_ seconds: TimeInterval) -> String {
+    let total = Int(seconds)
+    return String(format: "%02d:%02d", total / 60, total % 60)
+}</code></pre>
+  <p><code>durationInSeconds</code> étend <code>Song</code> (Leçon 2) sans toucher à sa définition — le même réflexe qu'en Leçon 3 quand <code>Playlist</code> a gagné <code>songs</code> au fil des besoins.</p>
+
+  <h2>Les paroles : un modèle horodaté</h2>
+  <p>Chaque ligne de paroles porte l'instant (en secondes) où elle doit apparaître — le texte lui-même est fictif, la mission portant sur l'UI et non sur de vraies paroles sous droits :</p>
+
+  <pre><code>struct LyricLine: Identifiable, Hashable {
+    let id = UUID()
+    let time: TimeInterval
+    let text: String
+}
+
+let mockLyrics: [LyricLine] = [
+    LyricLine(time: 0,  text: "Première ligne des paroles simulées"),
+    LyricLine(time: 4,  text: "Chaque ligne a son propre horodatage"),
+    LyricLine(time: 8,  text: "Le refrain arrive dans quelques secondes"),
+    LyricLine(time: 12, text: "On surligne la ligne courante en la comparant au temps"),
+    LyricLine(time: 16, text: "Et on fait défiler la vue jusqu'à elle"),
+    LyricLine(time: 20, text: "Sans jamais stocker \"quelle ligne est active\" à part"),
+]</code></pre>
+
+  <p>Une seule constante <code>mockLyrics</code>, réutilisée quelle que soit la chanson jouée — associer de vraies paroles distinctes à chaque chanson du catalogue est un problème de contenu, pas d'UI, hors du périmètre de cette mission.</p>
+
+  <h2>Dériver la ligne courante plutôt que la stocker</h2>
+  <p>La tentation serait d'ajouter un <code>@State private var currentLineIndex = 0</code>, incrémenté à côté de <code>progress</code>. Mais c'est exactement le piège que la Leçon 4 t'a appris à éviter avec <code>PlayerState</code> : deux états à garder synchronisés, alors qu'un seul (<code>progress</code>) suffit à calculer l'autre :</p>
+
+  <pre><code>struct LyricsView: View {
+    let lyrics: [LyricLine]
+    let currentTime: TimeInterval
+
+    private var currentLine: LyricLine? {
+        lyrics.last { $0.time <= currentTime }
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(lyrics) { line in
+                        Text(line.text)
+                            .font(line == currentLine ? .title3.bold() : .body)
+                            .foregroundStyle(line == currentLine ? .primary : .secondary)
+                            .id(line.id)
+                    }
+                }
+            }
+            .onChange(of: currentLine) { _, newLine in
+                guard let newLine else { return }
+                withAnimation {
+                    proxy.scrollTo(newLine.id, anchor: .center)
+                }
+            }
+        }
+    }
+}</code></pre>
+
+  <p><code>currentLine</code> est une propriété <em>calculée</em>, pas un <code>@State</code> : à chaque changement de <code>currentTime</code>, SwiftUI la recalcule et redessine le texte concerné — exactement le même principe que <code>isSelected: mode == option</code> dans <code>ModeCard</code> (Leçon 2), appliqué ici à une liste plutôt qu'à deux boutons.</p>
+
+  <h2><code>ScrollViewReader</code> — faire défiler par code</h2>
+  <p><code>ScrollViewReader</code> expose un <code>proxy</code> dont <code>scrollTo(_:anchor:)</code> fait défiler jusqu'à la vue portant l'<code>.id(_:)</code> donné — le plus proche en UIKit serait <code>scrollRectToVisible(_:animated:)</code> ou <code>scrollToRow(at:at:animated:)</code> sur un <code>UITableView</code>, mais ici on cible n'importe quelle vue par une valeur <code>Hashable</code>, pas un <code>IndexPath</code>.</p>
+
+  <details class="aside">
+    <summary>Pourquoi <code>.onChange(of: currentLine)</code> a besoin que <code>LyricLine</code> soit <code>Equatable</code></summary>
+    <p><code>.onChange(of:)</code> compare l'ancienne et la nouvelle valeur pour savoir s'il doit réagir — il lui faut donc <code>Equatable</code>. <code>LyricLine</code> est déjà <code>Hashable</code> (nécessaire pour <code>.id(line.id)</code> et pour comparer les <code>Optional&lt;LyricLine&gt;</code> dans <code>ForEach</code>), et <code>Hashable</code> implique <code>Equatable</code> — rien à ajouter.</p>
+  </details>
+
+  <h2>Table de traduction UIKit/RxSwift → SwiftUI/Combine (compléments)</h2>
+  <table class="compare-table">
+    <tr><th>UIKit / RxSwift</th><th>SwiftUI / Combine</th></tr>
+    <tr><td><code>Timer.scheduledTimer</code> + <code>invalidate()</code> manuel</td><td><code>Timer.publish(every:on:in:).autoconnect()</code> + <code>.onReceive</code> (arrêt automatique)</td></tr>
+    <tr><td><code>Observable&lt;Int&gt;.interval(_:scheduler:)</code> (RxSwift)</td><td><code>Timer.publish(every:on:in:)</code> (Combine)</td></tr>
+    <tr><td><code>UIScrollView.scrollRectToVisible(_:animated:)</code></td><td><code>ScrollViewReader</code> + <code>proxy.scrollTo(_:anchor:)</code></td></tr>
+    <tr><td>Variable calculée à la volée dans <code>cellForRowAt</code></td><td>Propriété calculée lue directement dans <code>body</code> (ex. <code>currentLine</code>)</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    Doc officielle Apple : <a href="https://developer.apple.com/documentation/swiftui/scrollviewreader"><code>ScrollViewReader</code></a>, <a href="https://developer.apple.com/documentation/foundation/timer/timerpublisher"><code>Timer.TimerPublisher</code></a>, <a href="https://developer.apple.com/documentation/swiftui/view/onchange(of:initial:_:)"><code>onChange(of:initial:_:)</code></a>. Si Combine te semble flou au-delà de cet exemple, le chapitre Combine de <a href="https://developer.apple.com/tutorials/swiftui">"SwiftUI Tutorials"</a> ou une recherche "Combine vs RxSwift" te fera gagner du temps en t'appuyant sur ce que tu connais déjà.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi <code>Timer.publish(...).autoconnect()</code> plutôt qu'un <code>Timer.scheduledTimer</code> classique ici ?</p>
+    <label><input type="radio" name="q1" value="a"> Il est plus précis à la milliseconde près</label>
+    <label><input type="radio" name="q1" value="b"> Il s'intègre à .onReceive et s'arrête tout seul avec le cycle de vie de la vue, sans invalidate() manuel</label>
+    <label><input type="radio" name="q1" value="c"> Il fonctionne même quand l'app est en arrière-plan</label>
+    <label><input type="radio" name="q1" value="d"> Timer.scheduledTimer n'existe plus depuis iOS 17</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="scrollto|scrollTo">
+    <p class="quiz-question">2. Quelle méthode du proxy de <code>ScrollViewReader</code> déplace le défilement jusqu'à une vue précise ?</p>
+    <input type="text" placeholder="…">
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi calculer <code>currentLine</code> plutôt que stocker un <code>@State private var currentLineIndex</code> séparé ?</p>
+    <label><input type="radio" name="q3" value="a"> Une seule source de vérité (progress) suffit ; un second état créerait deux valeurs à garder synchronisées</label>
+    <label><input type="radio" name="q3" value="b"> Un @State ne peut pas contenir un Int</label>
+    <label><input type="radio" name="q3" value="c"> ForEach l'exige pour fonctionner</label>
+    <label><input type="radio" name="q3" value="d"> Ça n'a aucune importance, les deux approches sont équivalentes</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="equatable|Equatable">
+    <p class="quiz-question">4. Quel protocole doit satisfaire <code>LyricLine</code> pour être utilisée avec <code>.onChange(of:)</code> (déjà acquis via Hashable) ?</p>
+    <input type="text" placeholder="…">
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le défilement saute au lieu de glisser, ou la ligne surlignée est en retard d'une ligne ? Vérifie d'abord que <code>currentLine</code> compare bien avec <code>&lt;=</code> et que <code>lyrics</code> est trié par <code>time</code> croissant — <code>.last { ... }</code> suppose cet ordre. Demande à ton agent si besoin.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0004-lecteur-plein-ecran-et-mini-lecteur.html">← Leçon 4 : le lecteur plein écran et le mini-lecteur</a></span>
+    <span><a href="0006-viewmodel-et-service-telechargement.html">Leçon suivante : ViewModel et Service (télécharger une chanson) →</a></span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

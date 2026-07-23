@@ -22,6 +22,12 @@
   Bonnes pratiques Apple sur la structure d'une barre d'onglets — utile pour juger si notre reproduction respecte les conventions iOS plutôt que de copier bêtement le pixel.
 - [Apple Developer Human Interface Guidelines — "Modality"](https://developer.apple.com/design/human-interface-guidelines/modality)
   Quand utiliser une feuille modale (`sheet`) plutôt qu'une navigation push — pertinent pour la fiche chanson et le lecteur plein écran.
+- [Fatbobman — "SwiftUI Environment: Concepts and Practice"](https://fatbobman.com/en/posts/swiftui-environment-concepts-and-practice/)
+  Article trouvé par Nicolas lui-même en debuggant la Leçon 4 (crash par confusion entre injection par type `.environment(_:)` et lecture par keypath `@Environment(\.key)`). Bonne référence de fond sur `@Environment`, à lire en entier avant d'introduire une clé personnalisée — mais dans ce projet, préférer systématiquement la forme par type pour tout objet `@Observable` (plus simple, pas de boilerplate `EnvironmentKey`).
+- [Apple Developer: `ScrollViewReader`](https://developer.apple.com/documentation/swiftui/scrollviewreader)
+  Doc officielle — défilement programmatique, utilisé en Leçon 5 pour synchroniser l'affichage des paroles avec la progression simulée.
+- [Apple Developer: `Timer.TimerPublisher`](https://developer.apple.com/documentation/foundation/timer/timerpublisher)
+  Doc officielle Combine — base de la simulation de progression de lecture en Leçon 5.
 
 ## Wisdom (Communities)
 
@@ -34,4 +40,4 @@
 
 ## Gaps
 
-- Pas encore de ressource identifiée spécifiquement sur l'animation de texte façon "paroles surlignées en cours de lecture" (karaoke-style text highlight) — à rechercher quand la leçon sur le lecteur plein écran sera abordée. Probablement une combinaison de `Text` avec `AttributedString`/`ForegroundStyle` animé plutôt qu'un composant tout fait.
+- Aucun gap identifié pour le moment.

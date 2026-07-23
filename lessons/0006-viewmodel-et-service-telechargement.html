@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 6 — ViewModel et Service : télécharger une chanson</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 6 · Architecture en couches (1/N)</p>
+  <h1>ViewModel et Service : télécharger une chanson</h1>
+  <p class="subtitle">Premier maillon d'un chantier qui va s'étaler sur plusieurs leçons : sortir la logique métier des vues. On commence par le cas le plus simple à isoler — télécharger une chanson pour l'écoute hors-ligne — sans encore introduire de couche Domain/UseCase.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> <a href="../MISSION.md">MISSION.md</a> note maintenant explicitement ce manque : jusqu'ici, toutes les vues (<code>SongOptionsSheet</code>, <code>PlaylistDetailView</code>…) mélangent présentation et données mockées en dur, dans un unique dossier <code>Views</code>. Pas de ViewModel, pas de Service, pas de test possible sans lancer l'UI. C'est exactement le genre de structuration qu'un poste de Tech Lead te demandera de justifier — cette leçon pose le premier vrai exemple, sur une fonctionnalité neuve plutôt que sur du code déjà entortillé à démêler.
+  </div>
+
+  <h2>Étape 0 — trois dossiers plutôt qu'un</h2>
+  <p>Dans Xcode, à côté de <code>Views/</code>, crée deux nouveaux groupes : <code>ViewModels/</code> et <code>Services/</code>. On n'ajoute pas encore de <code>Domain/</code> — une couche Domain/UseCase qui ne fait qu'appeler un Service sans ajouter de règle métier est de la abstraction gratuite. On l'introduira dans une prochaine leçon, quand une vraie règle (ex. "interdire deux téléchargements simultanés à l'échelle de l'app") le justifiera.</p>
+
+  <h2>Le Service : la seule couche qui "sait" comment télécharger</h2>
+  <p>Un protocole d'abord, une implémentation mockée ensuite — c'est l'inversion de dépendance que tu appliquais déjà avec des protocoles côté Alamofire/réseau en UIKit. Le ViewModel dépendra du protocole, jamais de l'implémentation concrète.</p>
+
+  <pre><code>protocol SongDownloading: Sendable {
+    func download(_ song: Song) -> AsyncStream&lt;Double&gt;
+}
+
+struct MockSongDownloadService: SongDownloading {
+    func download(_ song: Song) -> AsyncStream&lt;Double&gt; {
+        AsyncStream { continuation in
+            Task {
+                for step in 1...10 {
+                    try? await Task.sleep(for: .milliseconds(200))
+                    continuation.yield(Double(step) / 10)
+                }
+                continuation.finish()
+            }
+        }
+    }
+}</code></pre>
+
+  <p><code>AsyncStream&lt;Double&gt;</code> émet une valeur de progression toutes les 200ms puis se termine — le consommateur la parcourt avec <code>for await</code>, comme un <code>Observable&lt;Double&gt;</code> RxSwift qu'on <code>subscribe</code>rait, sans <code>DisposeBag</code> à tenir. <code>Sendable</code> sur le protocole documente que n'importe quelle implémentation doit être sûre à partager entre contextes de concurrence — ici <code>MockSongDownloadService</code> n'a aucun état stocké, donc rien à vérifier de plus.</p>
+
+  <details class="aside">
+    <summary>Pourquoi pas un simple callback <code>onProgress: (Double) -> Void</code> ?</summary>
+    <p>Une closure <code>@escaping</code> passée à une fonction <code>async</code> doit être <code>@Sendable</code> pour satisfaire la vérification stricte de concurrence de Swift 6 dès qu'elle traverse une frontière d'acteur — une source d'erreurs de compilation frustrantes pour un gain nul ici. <code>AsyncStream</code> est le mécanisme pensé pour exactement ce cas (une séquence de valeurs dans le temps) et évite le problème à la racine.</p>
+  </details>
+
+  <h2>Le ViewModel : état observable, jamais de vue à l'intérieur</h2>
+  <pre><code>enum DownloadState: Equatable {
+    case notDownloaded
+    case downloading(progress: Double)
+    case downloaded
+    case failed
+}
+
+@MainActor
+@Observable
+final class SongDownloadViewModel {
+    private(set) var state: DownloadState = .notDownloaded
+
+    private let song: Song
+    private let service: SongDownloading
+
+    init(song: Song, service: SongDownloading = MockSongDownloadService()) {
+        self.song = song
+        self.service = service
+    }
+
+    func startDownload() {
+        guard state == .notDownloaded || state == .failed else { return }
+        state = .downloading(progress: 0)
+        Task {
+            for await progress in service.download(song) {
+                state = .downloading(progress: progress)
+            }
+            state = .downloaded
+        }
+    }
+}</code></pre>
+
+  <p><code>@MainActor</code> sur la classe entière garantit que toute mutation de <code>state</code> se fait sur le thread principal — nécessaire puisque ce state pilote directement de l'UI. <code>private(set)</code> empêche la vue d'écrire <code>state</code> directement : elle ne peut que le lire et appeler <code>startDownload()</code>, qui seul décide des transitions. <code>service: SongDownloading</code> (le protocole, pas <code>MockSongDownloadService</code>) avec une valeur par défaut — c'est ce qui rendra ce ViewModel testable avec un faux service plus tard, sans toucher à son code.</p>
+
+  <h2>Brancher dans <code>SongOptionsSheet</code></h2>
+  <p>Le ViewModel est créé paresseusement dans <code>.task</code>, pas dans l'<code>init</code> de la vue — ça évite toute question sur le contexte d'acteur au moment de la construction de la vue, <code>.task</code> s'exécutant déjà sur le contexte principal :</p>
+
+  <pre><code>struct SongOptionsSheet: View {
+    let song: Song
+    @State private var downloadViewModel: SongDownloadViewModel?
+    // ... @State existants inchangés (mode, singerName, adjustVolumes, pitch, tempo)
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                SongHeader(song: song)
+
+                if let downloadViewModel {
+                    DownloadButton(viewModel: downloadViewModel)
+                }
+
+                // ... ModeCard, TextField, Toggle, Sliders, boutons inchangés
+            }
+            .padding()
+        }
+        .task {
+            if downloadViewModel == nil {
+                downloadViewModel = SongDownloadViewModel(song: song)
+            }
+        }
+    }
+}
+
+struct DownloadButton: View {
+    let viewModel: SongDownloadViewModel
+
+    var body: some View {
+        switch viewModel.state {
+        case .notDownloaded:
+            Button("Télécharger", systemImage: "arrow.down.circle") {
+                viewModel.startDownload()
+            }
+        case .downloading(let progress):
+            HStack {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100)) %")
+                    .font(.caption)
+                    .monospacedDigit()
+            }
+        case .downloaded:
+            Label("Téléchargée", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .failed:
+            Button("Réessayer", systemImage: "exclamationmark.triangle") {
+                viewModel.startDownload()
+            }
+        }
+    }
+}</code></pre>
+
+  <details class="aside">
+    <summary>Pourquoi <code>let viewModel: SongDownloadViewModel</code> suffit dans <code>DownloadButton</code>, sans <code>@ObservedObject</code> ?</summary>
+    <p>Avec l'ancien <code>ObservableObject</code>, oublier <code>@ObservedObject</code> sur une propriété stockant l'objet dans une vue enfant était un piège classique : sans lui, la vue ne se redessinait pas quand une propriété <code>@Published</code> changeait. Le framework Observation supprime ce piège : une classe <code>@Observable</code> lue dans <code>body</code> (ici via <code>viewModel.state</code>) est automatiquement suivie, qu'elle soit stockée avec <code>let</code>, passée en paramètre simple, ou récupérée via <code>@Environment</code> — plus de wrapper spécial à retenir pour la simple lecture.</p>
+  </details>
+
+  <h2>Table de traduction MVVM (RxSwift/UIKit) → SwiftUI + Observation</h2>
+  <table class="compare-table">
+    <tr><th>UIKit + RxSwift</th><th>SwiftUI + Observation</th></tr>
+    <tr><td>ViewModel avec <code>BehaviorRelay</code>/<code>PublishSubject</code> exposé en <code>Observable</code></td><td>Classe <code>@Observable</code> avec des propriétés stockées simples</td></tr>
+    <tr><td><code>.subscribe(onNext:)</code> + <code>DisposeBag</code></td><td>Lecture directe dans <code>body</code>, suivie automatiquement</td></tr>
+    <tr><td>Protocole de service injecté au ViewModel via son <code>init</code> (déjà connu)</td><td>Identique — <code>service: SongDownloading</code> injecté au <code>init</code></td></tr>
+    <tr><td><code>Observable&lt;Double&gt;</code> de progression réseau</td><td><code>AsyncStream&lt;Double&gt;</code> consommé par <code>for await</code></td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    Doc officielle Apple : <a href="https://developer.apple.com/documentation/swift/asyncstream"><code>AsyncStream</code></a>, <a href="https://developer.apple.com/documentation/swift/task"><code>Task</code></a>, <a href="https://developer.apple.com/documentation/swift/mainactor"><code>MainActor</code></a>. Vidéo recommandée : <a href="https://developer.apple.com/videos/play/wwdc2023/10149/">"Discover Observation in SwiftUI" (WWDC23)</a> — couvre précisément ce qui remplace <code>@ObservedObject</code>/<code>@Published</code>.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">1. Pourquoi le ViewModel dépend-il du protocole <code>SongDownloading</code> plutôt que directement de <code>MockSongDownloadService</code> ?</p>
+    <label><input type="radio" name="q1" value="a"> Pour pouvoir substituer une autre implémentation (test, vrai réseau) sans modifier le ViewModel</label>
+    <label><input type="radio" name="q1" value="b"> Parce qu'une struct ne peut pas être stockée directement dans une classe</label>
+    <label><input type="radio" name="q1" value="c"> Parce que AsyncStream l'exige explicitement</label>
+    <label><input type="radio" name="q1" value="d"> Ça n'a pas d'importance, c'est une question de style</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Pourquoi créer <code>SongDownloadViewModel</code> dans <code>.task</code> plutôt que dans l'init de <code>SongOptionsSheet</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> .task est appelé plus tôt que l'init</label>
+    <label><input type="radio" name="q2" value="b"> Ça évite toute question sur le contexte d'acteur au moment de la construction de la vue</label>
+    <label><input type="radio" name="q2" value="c"> L'init d'une View ne peut jamais créer d'objet</label>
+    <label><input type="radio" name="q2" value="d"> .task s'exécute avant que song ne soit disponible</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">3. Pourquoi <code>state</code> est-il <code>private(set)</code> dans le ViewModel ?</p>
+    <label><input type="radio" name="q3" value="a"> C'est obligatoire pour toute propriété @Observable</label>
+    <label><input type="radio" name="q3" value="b"> Ça améliore les performances de rendu</label>
+    <label><input type="radio" name="q3" value="c"> Seul le ViewModel doit pouvoir décider des transitions d'état, la vue ne fait que lire et déclencher des actions</label>
+    <label><input type="radio" name="q3" value="d"> Sinon DownloadButton ne compile pas</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="asyncstream|AsyncStream">
+    <p class="quiz-question">4. Quel type remplace ici un callback <code>@escaping</code> pour émettre une suite de valeurs de progression dans le temps ?</p>
+    <input type="text" placeholder="…">
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Xcode signale une erreur de concurrency que tu ne comprends pas, ou le téléchargement ne progresse jamais visuellement ? Colle le message exact à ton agent — ces erreurs sont précises mais parfois mal formulées, une lecture à deux va plus vite qu'à deviner seul.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0005-paroles-simulees-et-defilement.html">← Leçon 5 : paroles simulées et défilement synchronisé</a></span>
+    <span>Leçon suivante : Domain/UseCase — quand une vraie règle métier le justifiera</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

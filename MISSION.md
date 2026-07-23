@@ -8,6 +8,8 @@ Nicolas a une expérience Swift solide mais ancienne (production 2019–2021, UI
 - Usage correct et déclaratif de `TabView`, `NavigationStack`, `ScrollView`/`List`, présentation modale (`sheet`), `Slider`/`Toggle`, et animations SwiftUI de base
 - Un état d'app structuré avec `@State`/`@Observable` — mise en pratique de ce qui a été vu en théorie ailleurs, pas une re-découverte
 - Capacité à expliquer et modifier à la volée son propre code SwiftUI
+- Une architecture en couches (Vue → ViewModel → Domain/UseCase → Repository/Service) introduite progressivement sur un cas concret (télécharger une chanson), pour être capable de discuter de structuration d'app à un niveau Tech Lead — pas juste des vues avec de la donnée mockée en dur
+- Une fois l'architecture en place : couverture de tests (XCTest/Swift Testing) sur la logique extraite (ViewModel, UseCase), puis un passage accessibilité (VoiceOver, Dynamic Type) sur les écrans existants — dans cet ordre, décidé par Nicolas le 2026-07-23
 
 ## Constraints
 - Développement réel (build/run, Previews) fait sur un Mac séparé avec Xcode ; la rédaction des leçons et du code se fait ici, sous Windows/Claude Code → le pont entre les deux est Git (dépôt `karamock` sur GitHub).

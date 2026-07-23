@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 3 — La liste de chansons d'une playlist</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 3 · Navigation et listes</p>
+  <h1>La liste de chansons d'une playlist</h1>
+  <p class="subtitle">On relie enfin les Leçons 1 et 2 : taper une playlist pousse un écran de liste, taper une chanson ouvre la fiche que tu as déjà construite. Et on introduit <code>List</code>, le vrai équivalent SwiftUI d'un <code>UITableView</code>.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> jusqu'ici, <code>DiscoverView</code> (Leçon 1) et <code>SongOptionsSheet</code> (Leçon 2) existaient chacun de leur côté, testés en isolation via Preview. Un vrai écran de navigation, c'est justement ça : des vues qu'on relie. Cette leçon ferme la boucle et introduit <code>List</code> et <code>NavigationLink(value:)</code>, les deux briques qui manquaient pour naviguer entre elles.
+  </div>
+
+  <figure class="shot">
+    <img src="../reference/screenshots/02-playlist-detail.png" alt="Écran de détail d'une playlist KaraFun listant les chansons Les Légendes du Rock">
+    <figcaption>Ce qu'on reproduit : le titre de la playlist en haut, une pochette, puis la liste des chansons — chacune ouvrant la fiche chanson de la Leçon 2 au tap.</figcaption>
+  </figure>
+
+  <h2><code>List</code> — l'équivalent SwiftUI de <code>UITableView</code></h2>
+  <p>La Leçon 1 a utilisé <code>ScrollView(.horizontal)</code> + <code>LazyHStack</code> pour la rangée de playlists — un choix délibéré quand tu veux un contrôle total sur la mise en page (cartes larges, scroll horizontal). Pour une liste verticale de lignes uniformes comme des chansons, SwiftUI a un composant dédié : <code>List</code>. C'est l'équivalent le plus proche d'un <code>UITableView</code> — séparateurs automatiques, style de ligne cohérent avec le reste d'iOS, et prêt à recevoir des actions de balayage (<code>.swipeActions</code>) ou de suppression plus tard, sans code supplémentaire.</p>
+
+  <pre><code>List(playlist.songs) { song in
+    Button {
+        selectedSong = song
+    } label: {
+        SongRow(song: song)
+    }
+    .buttonStyle(.plain)
+}
+.listStyle(.plain)</code></pre>
+
+  <p><code>List(playlist.songs)</code> exige que <code>Song</code> soit <code>Identifiable</code> — déjà le cas depuis la Leçon 2. Chaque ligne est un <code>Button</code> plutôt qu'un simple <code>Text</code> parce qu'on veut réagir au tap ; le réflexe <code>.buttonStyle(.plain)</code> de la Leçon 2 s'applique encore ici, sinon <code>List</code> ajoute sa propre coloration de sélection par-dessus ton contenu.</p>
+
+  <h2>Étendre un type existant : <code>Playlist</code> gagne des chansons</h2>
+  <p>La <code>Playlist</code> de la Leçon 1 n'avait qu'un titre et des couleurs de dégradé. Comme en développement réel, on l'enrichit au fur et à mesure des besoins plutôt que de tout réécrire :</p>
+
+  <pre><code>struct Playlist: Identifiable, Hashable {
+    let id = UUID()
+    let title: String
+    let gradientColors: [Color]
+    let songs: [Song]
+}</code></pre>
+
+  <p>On ajoute aussi <code>Hashable</code> — Swift le génère automatiquement puisque toutes les propriétés (<code>UUID</code>, <code>String</code>, <code>[Color]</code>, <code>[Song]</code>) le sont déjà, à condition que <code>Song</code> le soit aussi :</p>
+
+  <pre><code>struct Song: Identifiable, Hashable {
+    let id = UUID()
+    let title: String
+    let artist: String
+    let year: Int
+    let duration: String
+    let key: String
+}</code></pre>
+
+  <p>Il faut mettre à jour <code>mockPlaylists</code> (Leçon 1) pour donner un tableau <code>songs</code> à chaque playlist — vide pour les trois existantes, rempli pour la nouvelle "Légendes du Rock" qu'on ajoute :</p>
+
+  <pre><code>let mockPlaylists: [Playlist] = [
+    Playlist(title: "Best Of", gradientColors: [.orange, .pink], songs: []),
+    Playlist(title: "Années 2000\nen France", gradientColors: [.blue, .red], songs: []),
+    Playlist(title: "Karaoké\nClassics", gradientColors: [.yellow, .brown], songs: []),
+    Playlist(title: "Légendes\ndu Rock", gradientColors: [.black, .orange], songs: [
+        Song(title: "You Give Love a Bad Name", artist: "Bon Jovi", year: 1986, duration: "03:35", key: "Cm"),
+        Song(title: "Sweet Child O' Mine", artist: "Guns N' Roses", year: 1987, duration: "05:56", key: "Dm"),
+        Song(title: "Nothing Else Matters", artist: "Metallica", year: 1991, duration: "06:28", key: "Em"),
+        Song(title: "Livin' on a Prayer", artist: "Bon Jovi", year: 1986, duration: "04:09", key: "Dm"),
+        Song(title: "Gimme Three Steps", artist: "Lynyrd Skynyrd", year: 1973, duration: "04:31", key: "A"),
+    ]),
+]</code></pre>
+
+  <h2>Pousser un écran : <code>NavigationLink(value:)</code> + <code>navigationDestination(for:)</code></h2>
+  <p>Dans <code>PlaylistSection</code> — la vue qui contient déjà le <code>ForEach</code> sur les playlists (Leçon 1) — on enveloppe chaque <code>PlaylistCard</code> dans un <code>NavigationLink(value:)</code>. La déclaration de la destination, elle, se fait <em>une seule fois</em>, sur le <code>NavigationStack</code> qui vit dans <code>DiscoverView</code> :</p>
+
+  <pre><code>ScrollView(.horizontal, showsIndicators: false) {
+    LazyHStack(spacing: 14) {
+        ForEach(playlists) { playlist in
+            NavigationLink(value: playlist) {
+                PlaylistCard(playlist: playlist)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+    .padding(.horizontal)
+}</code></pre>
+
+  <pre><code>// Sur le NavigationStack de DiscoverView, à côté de .navigationTitle
+.navigationDestination(for: Playlist.self) { playlist in
+    PlaylistDetailView(playlist: playlist)
+}</code></pre>
+
+  <p>C'est le remplaçant moderne (iOS 16+) de l'ancien <code>NavigationLink(destination:)</code> qui embarquait la vue de destination directement dans chaque ligne. Séparer "quelle valeur" de "quelle vue afficher pour cette valeur" évite de construire toutes les destinations à l'avance — utile pour la performance sur de longues listes, et pour déclencher une navigation depuis du code (pas seulement un tap), ce qu'on fera dans une leçon future.</p>
+
+  <h2><code>PlaylistDetailView</code> — l'écran complet</h2>
+  <pre><code>struct PlaylistDetailView: View {
+    let playlist: Playlist
+    @State private var selectedSong: Song?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PlaylistCoverHeader(playlist: playlist)
+
+            List(playlist.songs) { song in
+                Button {
+                    selectedSong = song
+                } label: {
+                    SongRow(song: song)
+                }
+                .buttonStyle(.plain)
+            }
+            .listStyle(.plain)
+        }
+        .navigationTitle(playlist.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $selectedSong) { song in
+            SongOptionsSheet(song: song)
+        }
+    }
+}
+
+struct PlaylistCoverHeader: View {
+    let playlist: Playlist
+
+    var body: some View {
+        LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            .frame(height: 220)
+            .overlay {
+                Text(playlist.title)
+                    .font(.title2.bold())
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding()
+            }
+    }
+}
+
+struct SongRow: View {
+    let song: Song
+
+    var body: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.quaternary)
+                .frame(width: 50, height: 50)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(song.title)
+                Text(song.artist)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+}</code></pre>
+
+  <h2><code>.sheet(item:)</code> — la variante qui manquait à la Leçon 2, et où l'accrocher</h2>
+  <p>La Leçon 2 mentionnait <code>.sheet(isPresented:)</code>, qui a besoin de deux informations séparées : un booléen "faut-il afficher ?" et une donnée "laquelle afficher ?". Ici, on n'a besoin que d'une seule source de vérité : <code>@State private var selectedSong: Song?</code>. <code>nil</code> = rien à afficher, une valeur = affiche la feuille pour <em>cette</em> chanson.</p>
+
+  <p>Ce modificateur s'accroche sur la <strong><code>VStack</code> racine du <code>body</code> de <code>PlaylistDetailView</code></strong> — juste après <code>.navigationBarTitleDisplayMode(.inline)</code>, au même niveau que les autres modificateurs de l'écran :</p>
+
+  <pre><code>var body: some View {
+    VStack(spacing: 0) {
+        PlaylistCoverHeader(playlist: playlist)
+        List(playlist.songs) { /* ... */ }
+    }
+    .navigationTitle(playlist.title)
+    .navigationBarTitleDisplayMode(.inline)
+    .sheet(item: $selectedSong) { song in     // ← ici, sur la VStack
+        SongOptionsSheet(song: song)
+    }
+}</code></pre>
+
+  <p><code>.sheet(item:)</code> exige que le type soit <code>Identifiable</code> (encore <code>Song</code>) : SwiftUI l'utilise pour savoir si la feuille doit se refermer/rouvrir quand la valeur change. C'est plus simple à maintenir qu'un booléen et une variable "chanson courante" séparés — un seul état, pas deux à garder synchronisés.</p>
+
+  <details class="aside">
+    <summary>Pourquoi sur la <code>VStack</code>, et pas sur la <code>List</code> ou dans <code>SongRow</code> ?</summary>
+    <p><code>selectedSong</code> est un <code>@State</code> qui appartient à <code>PlaylistDetailView</code> — n'importe quelle vue à l'intérieur de <em>son</em> <code>body</code> peut porter le modificateur <code>.sheet</code>, qu'elle lise ou non directement cette variable. Ici, poser <code>.sheet</code> sur la <code>List</code> aurait fonctionné tout aussi bien : ce qui compte n'est pas la vue précise choisie, mais qu'elle appartienne au corps de la vue qui possède l'état. À l'inverse, tu ne peux pas poser ce modificateur dans <code>SongRow</code> : cette vue ne connaît pas <code>selectedSong</code>, elle ne fait que déclencher sa mutation via la closure du <code>Button</code> dans <code>PlaylistDetailView</code>.</p>
+  </details>
+
+  <details class="aside">
+    <summary><code>didSelectRowAt</code> n'existe plus — et c'est tant mieux</summary>
+    <p>En UIKit, sélectionner une ligne de <code>UITableView</code> passe par une méthode déléguée séparée (<code>tableView(_:didSelectRowAt:)</code>), déconnectée de la construction de la cellule. Ici, l'action de tap vit directement à côté du contenu de la ligne, dans le même bloc — plus besoin de retrouver la bonne donnée à partir d'un <code>IndexPath</code>.</p>
+  </details>
+
+  <h2>Table de traduction UIKit → SwiftUI (compléments)</h2>
+  <table class="compare-table">
+    <tr><th>UIKit</th><th>SwiftUI</th></tr>
+    <tr><td><code>UITableView</code> + <code>UITableViewCell</code></td><td><code>List</code></td></tr>
+    <tr><td><code>tableView(_:didSelectRowAt:)</code></td><td>Action inline dans le contenu de la ligne (ex. <code>Button</code>)</td></tr>
+    <tr><td><code>NavigationLink(destination:)</code> (ancien, iOS 15 et moins)</td><td><code>NavigationLink(value:)</code> + <code>.navigationDestination(for:)</code></td></tr>
+    <tr><td><code>present(_:animated:)</code> avec une donnée à transmettre</td><td><code>.sheet(item:)</code></td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    Doc officielle Apple : <a href="https://developer.apple.com/documentation/swiftui/list"><code>List</code></a>, <a href="https://developer.apple.com/documentation/swiftui/navigationlink"><code>NavigationLink</code></a>, <a href="https://developer.apple.com/documentation/swiftui/view/navigationdestination(for:destination:)"><code>navigationDestination(for:destination:)</code></a>, <a href="https://developer.apple.com/documentation/swiftui/view/sheet(item:ondismiss:content:)"><code>sheet(item:onDismiss:content:)</code></a>. Le tutoriel <a href="https://developer.apple.com/tutorials/swiftui">"SwiftUI Tutorials" (Landmarks)</a> couvre ce pattern <code>NavigationLink(value:)</code> en situation réelle si tu veux un deuxième exemple.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">1. Pourquoi utiliser <code>List</code> plutôt que <code>ScrollView</code> + <code>LazyVStack</code> pour la liste de chansons ?</p>
+    <label><input type="radio" name="q1" value="a"> C'est le composant dédié aux listes verticales de type tableau : séparateurs, style cohérent, et actions de balayage/suppression prêtes à l'emploi</label>
+    <label><input type="radio" name="q1" value="b"> ScrollView ne peut pas défiler verticalement</label>
+    <label><input type="radio" name="q1" value="c"> List est plus rapide à écrire mais fonctionnellement identique en tout point</label>
+    <label><input type="radio" name="q1" value="d"> Il n'y a pas de différence, c'est une question de goût</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Que faut-il déclarer pour utiliser <code>NavigationLink(value: playlist)</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> Rien de plus, SwiftUI devine la destination</label>
+    <label><input type="radio" name="q2" value="b"> Un <code>.navigationDestination(for: Playlist.self)</code> quelque part dans le NavigationStack</label>
+    <label><input type="radio" name="q2" value="c"> Un <code>@Binding</code> vers la vue de destination</label>
+    <label><input type="radio" name="q2" value="d"> Playlist doit être <code>Codable</code></label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi <code>.sheet(item: $selectedSong)</code> est-il plus simple ici que <code>.sheet(isPresented:)</code> ?</p>
+    <label><input type="radio" name="q3" value="a"> Une seule source de vérité (<code>Song?</code>) porte à la fois "faut-il afficher" et "quelle donnée afficher"</label>
+    <label><input type="radio" name="q3" value="b"> .sheet(item:) ne nécessite pas Identifiable</label>
+    <label><input type="radio" name="q3" value="c"> .sheet(isPresented:) est déprécié</label>
+    <label><input type="radio" name="q3" value="d"> Il n'y a aucune différence fonctionnelle</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="hashable|Hashable">
+    <p class="quiz-question">4. Quel protocole doit adopter <code>Playlist</code> pour être utilisée comme valeur de <code>NavigationLink(value:)</code> ?</p>
+    <input type="text" placeholder="…">
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">La navigation ne se déclenche pas au tap, ou la feuille s'ouvre avec la mauvaise chanson ? Vérifie d'abord que <code>.navigationDestination</code> est bien sur le <em>même</em> NavigationStack que le NavigationLink — une erreur fréquente est de le poser sur la mauvaise vue. Demande à ton agent si besoin.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0002-fiche-chanson-karaoke-battle.html">← Leçon 2 : la fiche chanson</a></span>
+    <span><a href="0004-lecteur-plein-ecran-et-mini-lecteur.html">Leçon suivante : le lecteur plein écran et le mini-lecteur →</a></span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

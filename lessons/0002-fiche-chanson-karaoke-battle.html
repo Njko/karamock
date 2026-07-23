@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 2 — La fiche chanson (Karaoké/Battle)</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 2 · La fiche chanson</p>
+  <h1>La fiche chanson : Karaoké ou Battle ?</h1>
+  <p class="subtitle">Un formulaire complet : choix exclusif entre deux options, champ texte, toggle, deux sliders — et l'outil qui va changer ta façon d'itérer sur du SwiftUI : les Previews.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> après le squelette de navigation (Leçon 1), on construit un vrai écran de saisie — le genre d'UI que tu vas devoir produire souvent dans une vraie app. C'est aussi l'occasion d'introduire les <strong>Previews</strong> (<code>#Preview</code>), l'outil que tu utiliseras à chaque ligne de SwiftUI que tu écriras désormais.
+  </div>
+
+  <figure class="shot">
+    <img src="../reference/screenshots/03-fiche-chanson.png" alt="Fiche chanson de l'app KaraFun avec les options Karaoké/Battle, le champ chanteur, et les réglages de tonalité/tempo">
+    <figcaption>Ce qu'on reproduit : l'en-tête (pochette, titre, métadonnées), les deux cartes Karaoké/Battle, le champ "Chanté par", le toggle "Régler les volumes", et les réglages tonalité/tempo.</figcaption>
+  </figure>
+
+  <h2><code>#Preview</code> — arrête de lancer le simulateur à chaque changement</h2>
+  <p>Tu as vu en théorie que les macros Swift (comme <code>@Observable</code>) remplacent du code généré à la compilation. <code>#Preview</code> en est un exemple très concret : c'est une macro qui affiche ta vue dans le <strong>canvas</strong> d'Xcode, à côté de ton code, sans lancer l'app dans le simulateur. Modifie ton code, le canvas se met à jour quasi instantanément.</p>
+  <pre><code>#Preview {
+    SongOptionsSheet(song: .init(
+        title: "You Give Love a Bad Name",
+        artist: "Bon Jovi",
+        year: 1986,
+        duration: "03:35",
+        key: "Cm"
+    ))
+}</code></pre>
+  <p>Colle ce bloc à la fin du fichier qui contient <code>SongOptionsSheet</code> (plus bas). Ouvre le canvas avec <strong>Cmd+Option+Return</strong> si Xcode ne l'affiche pas déjà. C'est l'équivalent le plus proche du "aperçu à chaud" que tu connais peut-être d'un design system web, mais compilé et natif — Interface Builder n'offrait rien d'aussi rapide en UIKit.</p>
+
+  <h2>Le modèle de données et la sélection exclusive</h2>
+  <p>Karaoké et Battle sont deux options mutuellement exclusives — exactement ce que modélise un <code>enum</code> Swift, que tu connais déjà. La nouveauté, c'est de piloter l'UI avec :</p>
+
+  <pre><code>enum KaraokeMode: String, CaseIterable, Identifiable {
+    case karaoke = "Karaoké classique"
+    case battle = "Karaoké avec scoring des voix"
+
+    var id: String { rawValue }
+    var title: String { self == .karaoke ? "Karaoké" : "Battle" }
+    var subtitle: String { rawValue }
+    var systemImage: String { self == .karaoke ? "pencil.tip" : "figure.fencing" }
+}
+
+struct Song: Identifiable {
+    let id = UUID()
+    let title: String
+    let artist: String
+    let year: Int
+    let duration: String
+    let key: String
+}</code></pre>
+
+  <p><code>CaseIterable</code> donne accès à <code>KaraokeMode.allCases</code>, ce qui permet de faire un <code>ForEach</code> sur les deux cas sans les lister à la main — pratique si un troisième mode s'ajoute un jour.</p>
+
+  <h2>La carte de sélection (bouton personnalisé)</h2>
+  <p>Une carte Karaoké/Battle est un <code>Button</code> dont le <em>contenu</em> est entièrement personnalisé — pas un simple bouton texte. C'est un pattern très courant en SwiftUI : n'importe quelle vue peut être le contenu d'un bouton.</p>
+
+  <pre><code>struct ModeCard: View {
+    let option: KaraokeMode
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack {
+                Image(systemName: option.systemImage)
+                VStack(alignment: .leading) {
+                    Text(option.title).font(.headline)
+                    Text(option.subtitle).font(.subheadline)
+                }
+                Spacer()
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+            }
+            .padding()
+            .background(isSelected ? Color.purple.opacity(0.15) : Color(.secondarySystemBackground))
+            .foregroundStyle(.primary)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+    }
+}</code></pre>
+
+  <details class="aside">
+    <summary>Pourquoi <code>.buttonStyle(.plain)</code> est indispensable ici</summary>
+    <p>Sans lui, SwiftUI applique le style de bouton par défaut : il teinte tout le contenu en bleu et ignore en partie ton <code>.background</code> personnalisé. <code>.plain</code> dit à SwiftUI "n'applique aucune décoration automatique, affiche mon contenu tel quel". C'est un piège classique : un bouton qui a l'air cassé visuellement, alors que le vrai problème est l'absence de <code>.buttonStyle</code>.</p>
+  </details>
+
+  <h2>L'écran complet</h2>
+  <pre><code>struct SongOptionsSheet: View {
+    let song: Song
+    @State private var mode: KaraokeMode = .karaoke
+    @State private var singerName = ""
+    @State private var adjustVolumes = false
+    @State private var pitch: Double = 0
+    @State private var tempo: Double = 0
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                SongHeader(song: song)
+
+                VStack(spacing: 12) {
+                    ForEach(KaraokeMode.allCases) { option in
+                        ModeCard(option: option, isSelected: mode == option) {
+                            mode = option
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Chanté par").font(.headline)
+                    TextField("Chanteur", text: $singerName)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Toggle("Régler les volumes", isOn: $adjustVolumes)
+
+                VStack(alignment: .leading) {
+                    HStack {
+                        Text("Tonalité")
+                        Spacer()
+                        Text("\(Int(pitch))")
+                    }
+                    Slider(value: $pitch, in: -12...12, step: 1)
+                }
+
+                VStack(alignment: .leading) {
+                    HStack {
+                        Text("Tempo")
+                        Spacer()
+                        Text("\(Int(tempo)) %")
+                    }
+                    Slider(value: $tempo, in: -50...50, step: 5)
+                }
+
+                Button("Ajouter à la file d'attente") { }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.pink)
+                    .frame(maxWidth: .infinity)
+
+                Button("Jouer maintenant") { }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding()
+        }
+    }
+}
+
+struct SongHeader: View {
+    let song: Song
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.quaternary)
+                .frame(width: 60, height: 60)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(song.title).font(.title3.bold())
+                Text(song.artist).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Label("\(song.year)", systemImage: "calendar")
+                    Label(song.duration, systemImage: "clock")
+                    Label(song.key, systemImage: "wrench.fill")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+}</code></pre>
+
+  <p><code>@State private var mode: KaraokeMode = .karaoke</code> — c'est exactement le mécanisme que tu connais déjà en théorie : une source de vérité locale, mutable. Ici, quand <code>ModeCard</code> appelle <code>onSelect</code>, il modifie <code>mode</code> depuis l'extérieur — même principe qu'un <code>@Binding</code>, mais via une closure plutôt qu'un binding direct, ce qui suffit ici puisque <code>ModeCard</code> n'a pas besoin de lire ni écrire directement la variable.</p>
+
+  <h2>Comment cet écran sera présenté (aperçu)</h2>
+  <p>Dans l'app réelle, cette fiche s'ouvrira en <strong>feuille modale</strong> quand on tape sur une chanson dans une liste — ce sera la Leçon 3. Le mécanisme SwiftUI est <code>.sheet(isPresented:)</code>, l'équivalent déclaratif de <code>present(_:animated:)</code> en UIKit :</p>
+  <pre><code>.sheet(isPresented: $showSongSheet) {
+    SongOptionsSheet(song: selectedSong)
+}</code></pre>
+  <p>Pas besoin de le câbler maintenant — la Preview te suffit pour itérer sur cet écran isolément.</p>
+
+  <h2>Table de traduction UIKit → SwiftUI (compléments)</h2>
+  <table class="compare-table">
+    <tr><th>UIKit</th><th>SwiftUI</th></tr>
+    <tr><td><code>UITextField</code></td><td><code>TextField</code> + <code>.textFieldStyle(.roundedBorder)</code></td></tr>
+    <tr><td><code>UISwitch</code></td><td><code>Toggle</code></td></tr>
+    <tr><td><code>UISlider</code></td><td><code>Slider</code></td></tr>
+    <tr><td><code>@IBAction</code> sur un bouton</td><td>Closure passée à <code>Button(action:)</code></td></tr>
+    <tr><td><code>present(_:animated:)</code> (modal)</td><td><code>.sheet(isPresented:) { }</code></td></tr>
+    <tr><td>Aperçu Interface Builder (statique)</td><td><code>#Preview</code> (compilé, interactif, quasi instantané)</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    Doc officielle Apple : <a href="https://developer.apple.com/documentation/swiftui/previews-in-xcode">"Previews in Xcode"</a>, <a href="https://developer.apple.com/documentation/swiftui/toggle"><code>Toggle</code></a>, <a href="https://developer.apple.com/documentation/swiftui/slider"><code>Slider</code></a>, <a href="https://developer.apple.com/documentation/swiftui/textfield"><code>TextField</code></a>, <a href="https://developer.apple.com/documentation/swiftui/buttonstyle"><code>ButtonStyle</code></a>.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="#preview|#Preview">
+    <p class="quiz-question">1. Quelle macro affiche une vue SwiftUI dans le canvas d'Xcode sans lancer le simulateur ?</p>
+    <input type="text" placeholder="#…">
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">2. Pourquoi faut-il ajouter <code>.buttonStyle(.plain)</code> sur la carte Karaoké/Battle ?</p>
+    <label><input type="radio" name="q2" value="a"> Sinon SwiftUI applique un style par défaut qui écrase l'apparence personnalisée</label>
+    <label><input type="radio" name="q2" value="b"> Pour rendre le bouton cliquable (sinon il est désactivé)</label>
+    <label><input type="radio" name="q2" value="c"> C'est obligatoire pour tout <code>Button</code> contenant une image</label>
+    <label><input type="radio" name="q2" value="d"> Pour activer l'accessibilité VoiceOver</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">3. Quel est l'équivalent UIKit le plus proche de <code>Slider</code> ?</p>
+    <label><input type="radio" name="q3" value="a"> UIStepper</label>
+    <label><input type="radio" name="q3" value="b"> UISwitch</label>
+    <label><input type="radio" name="q3" value="c"> UISlider</label>
+    <label><input type="radio" name="q3" value="d"> UIProgressView</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">4. Comment SwiftUI sait-il quelle carte est "sélectionnée" parmi les cas de <code>KaraokeMode</code> ?</p>
+    <label><input type="radio" name="q4" value="a"> Chaque carte a son propre <code>@State</code> interne</label>
+    <label><input type="radio" name="q4" value="b"> On compare le <code>mode</code> courant (état du parent) à l'option de chaque carte</label>
+    <label><input type="radio" name="q4" value="c"> SwiftUI le déduit automatiquement de l'ordre des cas</label>
+    <label><input type="radio" name="q4" value="d"> Il faut un <code>@Binding</code> séparé par carte</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le canvas n'affiche rien ou plante ? Vérifie que le fichier compile (Cmd+B) — une Preview ne s'affiche jamais si le reste du fichier a une erreur. Demande à ton agent si le message d'erreur ne te parle pas.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0001-tabview-et-ecran-decouvrir.html">← Leçon 1 : TabView et l'écran Découvrir</a></span>
+    <span><a href="0003-liste-chansons-playlist.html">Leçon suivante : la liste de chansons d'une playlist →</a></span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
