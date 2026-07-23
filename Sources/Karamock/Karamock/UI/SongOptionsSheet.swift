@@ -66,6 +66,7 @@ struct SongOptionsSheet: View {
                 
                 Button("Jouer maintenant") {
                     player.currentSong = song
+                    player.isPlaying = true
                     player.isExpanded = true
                     dismiss()
                 }

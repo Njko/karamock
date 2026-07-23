@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 
 struct FullScreenPlayerView: View {
     @Environment(\.player) private var player
@@ -13,8 +14,11 @@ struct FullScreenPlayerView: View {
     
     let song: Song
     
+    @State private var progress: TimeInterval = 0
+    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+    
     var body: some View {
-        VStack(spacing: 32) {
+        VStack(spacing: 24) {
             Button {
                 dismiss()
             } label: {
@@ -23,9 +27,8 @@ struct FullScreenPlayerView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.quaternary)
-                .frame(width:260, height: 260)
+            LyricsView(lyrics: mockLyrics, currentTime: progress)
+                .frame(height:160)
             
             VStack(spacing: 4) {
                 Text(song.title).font(.title2.bold())
@@ -33,9 +36,9 @@ struct FullScreenPlayerView: View {
             }
             
             VStack(spacing:8) {
-                Slider(value: .constant(0.35))
+                Slider(value: $progress, in: 0...song.durationInSeconds)
                 HStack {
-                    Text("1:15")
+                    Text("0:00")
                     Spacer()
                     Text("-" + song.duration)
                 }
@@ -61,6 +64,16 @@ struct FullScreenPlayerView: View {
             }
             
             Spacer()
-        }.padding()
+        }
+        .padding()
+        .onReceive(timer) { _ in
+            guard player.isPlaying, progress < song.durationInSeconds else { return }
+            progress += 0.5
+        }
     }
+}
+
+#Preview {
+    FullScreenPlayerView(song: Song(title: "Year of the cat", artist: "Cat Stevens", year: 1986, duration: "3:33", key: "A"))
+        .environment(PlayerState())
 }
