@@ -13,6 +13,8 @@ struct SongOptionsSheet: View {
     
     let song: Song
     
+    @State private var downloadViewModel: SongDownloadViewModel?
+    
     @State private var mode: KaraokeMode = .karaoke
     @State private var singerName: String = ""
     @State private var adjustVolumes = false
@@ -23,6 +25,10 @@ struct SongOptionsSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 SongHeader(song: song)
+                
+                if let downloadViewModel {
+                    DownloadButton(viewModel: downloadViewModel)
+                }
                 
                 VStack(spacing: 12) {
                     ForEach(KaraokeMode.allCases) { option in
@@ -74,6 +80,11 @@ struct SongOptionsSheet: View {
                     .frame(maxWidth: .infinity)
             }
             .padding()
+        }
+        .task {
+            if downloadViewModel == nil {
+                downloadViewModel = SongDownloadViewModel(song: song)
+            }
         }
     }
 }
