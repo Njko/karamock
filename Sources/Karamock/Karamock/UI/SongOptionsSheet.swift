@@ -7,9 +7,12 @@
 
 import SwiftUI
 
-struct SongSheet: View {
+struct SongOptionsSheet: View {
+    @Environment(\.player) private var player
+    @Environment(\.dismiss) private var dismiss
     
     let song: Song
+    
     @State private var mode: KaraokeMode = .karaoke
     @State private var singerName: String = ""
     @State private var adjustVolumes = false
@@ -61,15 +64,15 @@ struct SongSheet: View {
                     .tint(.pink)
                     .frame(maxWidth: .infinity)
                 
-                Button("Jouer maintenant") { }
+                Button("Jouer maintenant") {
+                    player.currentSong = song
+                    player.isExpanded = true
+                    dismiss()
+                }
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)
             }
             .padding()
         }
     }
-}
-
-#Preview {
-    SongSheet(song: .init(title: "You Give Love a Bad Name", artist: "Bon Jovi", year: 1986, duration: "03:35", key: "Cm"))
 }

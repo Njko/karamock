@@ -29,7 +29,7 @@ struct PlaylistDetailView: View {
         .navigationTitle(playlist.title)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $selectedSong) { song in
-            SongSheet(song: song)
+            SongOptionsSheet(song: song)
         }
     }
 }
