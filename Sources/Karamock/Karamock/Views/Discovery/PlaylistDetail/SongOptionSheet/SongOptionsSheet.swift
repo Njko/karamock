@@ -86,7 +86,7 @@ struct SongOptionsSheet: View {
             if downloadViewModel == nil {
                 downloadViewModel = SongDownloadViewModel(
                     song: song,
-                    markSongAsDownloaded: DownloadSongUseCase(repository: downloadedSongsRepository)
+                    downloadSong: DownloadSongUseCase(repository: downloadedSongsRepository)
                 )
             }
         }
