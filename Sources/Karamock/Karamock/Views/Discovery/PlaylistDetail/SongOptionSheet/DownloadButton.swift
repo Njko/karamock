@@ -8,13 +8,14 @@
 import SwiftUI
 
 struct DownloadButton : View {
-    let viewModel : SongDownloadViewModel
+    let state : DownloadState
+    let startDownload: () -> Void
     
     var body: some View {
-        switch viewModel.state {
+        switch state {
         case .notDownloaded:
             Button("Télécharger", systemImage: "arrow.down.circle") {
-                viewModel.startDownload()
+                startDownload()
             }
             
         case .downloading(let progress):
@@ -30,7 +31,7 @@ struct DownloadButton : View {
                 .foregroundStyle(.green)
         case .failed:
             Button("Réessayer", systemImage: "exclamationmark.triangle") {
-                viewModel.startDownload()
+                startDownload()
             }
         }
     }

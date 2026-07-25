@@ -27,7 +27,7 @@ struct SongOptionsSheet: View {
                 SongHeader(song: song)
                 
                 if let downloadViewModel {
-                    DownloadButton(viewModel: downloadViewModel)
+                    DownloadButton(state : downloadViewModel.state, startDownload: downloadViewModel.startDownload)
                 }
                 
                 VStack(spacing: 12) {
