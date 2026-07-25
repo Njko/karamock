@@ -9,7 +9,7 @@
 - Programme confirmé pour la suite (mis à jour 2026-07-26 après insertion de la Leçon 8 de nettoyage), à ajuster si Nicolas change d'avis :
   - Leçon 7 — Domain/UseCase : `DownloadSongUseCase`, justifié par la règle "une chanson téléchargée doit apparaître dans la Bibliothèque" (LibraryView, stub vide depuis la Leçon 1). Fait.
   - Leçon 8 — Nettoyage : retrait de `service: SongDownloading` de `SongDownloadViewModel`, absorbé dans `DownloadSongUseCase` (Dependency Rule, repéré par Nicolas). Fait.
-  - Leçon 9 — L'onglet Bibliothèque affiche les chansons téléchargées (état partagé, pas mockPlaylists figé). Écrite, pas encore faite par Nicolas.
+  - Leçon 9 — L'onglet Bibliothèque affiche les chansons téléchargées (état partagé, pas mockPlaylists figé). `LibraryViewModel` lit via `FetchDownloadedSongsUseCase` (pas d'accès direct au Repository, corrigé par Nicolas avant même de commencer l'exercice — cf. Dependency Rule de la Leçon 8). Écrite, pas encore faite par Nicolas.
   - Leçon 10 — Stratégies d'injection de dépendance en Swift : composition root (`AppDependencies`), injection par constructeur vs par `@Environment`, suppression des valeurs par défaut cachées.
   - Leçon 11 — Tests (Swift Testing), rendus faciles par le découplage des Leçons 6-10.
   - Leçon 12+ — Accessibilité (VoiceOver, Dynamic Type) sur les écrans existants.

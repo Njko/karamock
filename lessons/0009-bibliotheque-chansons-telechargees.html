@@ -13,29 +13,58 @@
   <p class="subtitle">Boucle bouclée : la Leçon 7 a donné un sens à <code>DownloadedSongsRepository</code>, mais rien ne le lisait encore. On branche enfin <code>LibraryView</code> — stub vide depuis la Leçon 1 — dessus.</p>
 
   <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> jusqu'ici, le Repository de la Leçon 7 n'était écrit que d'un seul côté (<code>DownloadSongUseCase</code> y ajoute des chansons). Un repository qu'on ne lit jamais n'a aucune valeur observable — cette leçon ferme la boucle en lisant réellement <code>downloadedSongsRepository.songs()</code> et en l'affichant. C'est aussi la première vue de la mission qui consomme un acteur asynchrone plutôt qu'un simple <code>@State</code> local.
+    <strong>Pourquoi cette leçon :</strong> jusqu'ici, le Repository de la Leçon 7 n'était écrit que d'un seul côté (<code>DownloadSongUseCase</code> y ajoute des chansons). Un repository qu'on ne lit jamais n'a aucune valeur observable — cette leçon ferme la boucle en lisant réellement les chansons stockées et en les affichant. Et comme la Leçon 8 vient de le rappeler, un ViewModel ne doit jamais dépendre directement d'un Repository : la lecture passe donc, elle aussi, par un UseCase dédié plutôt que par un appel direct à <code>downloadedSongsRepository.songs()</code>. C'est aussi la première vue de la mission qui consomme un acteur asynchrone plutôt qu'un simple <code>@State</code> local.
   </div>
 
+  <h2>Un second UseCase, symétrique du premier</h2>
+  <p><code>DownloadSongUseCase</code> (Leçon 7) écrit dans le Repository. Il lui manque un pendant pour la lecture — sans lui, <code>LibraryViewModel</code> n'aurait d'autre choix que d'appeler <code>downloadedSongsRepository.songs()</code> directement, exactement la violation de la Dependency Rule que la Leçon 8 vient de corriger côté téléchargement.</p>
+
+  <pre><code>struct FetchDownloadedSongsUseCase: Sendable {
+    let repository: DownloadedSongsRepository
+
+    init(repository: DownloadedSongsRepository) {
+        self.repository = repository
+    }
+
+    func callAsFunction() async -> [Song] {
+        await repository.songs()
+    }
+}</code></pre>
+
+  <p>Même convention <code>callAsFunction</code> qu'en Leçon 7, même absence de valeur par défaut pour <code>repository</code> — ce paramètre doit obligatoirement pointer vers l'instance partagée par toute l'app. À eux deux, <code>DownloadSongUseCase</code> (écriture) et <code>FetchDownloadedSongsUseCase</code> (lecture) sont désormais les seules portes d'entrée vers <code>DownloadedSongsRepository</code> : aucun ViewModel n'a besoin — ni le droit — d'y accéder autrement.</p>
+
+  <details class="aside">
+    <summary>Struct, class ou actor ? Comment choisir</summary>
+    <p>La question à se poser en premier : <strong>ce type a-t-il un état mutable qui doit être partagé par référence ?</strong> Si non, une <code>struct</code> suffit (immuable ou copiée sans conséquence, sans identité) — <code>Sendable</code> y est alors quasiment gratuit : le compilateur le vérifie automatiquement dès que toutes les propriétés stockées le sont déjà, comme pour <code>Song</code> ou les deux UseCase de cette leçon. Si oui, il reste à choisir où vit cet état mutable :</p>
+    <table class="compare-table">
+      <tr><th>État mutable</th><th>Choix</th><th>Exemple</th></tr>
+      <tr><td>UI, lu/modifié uniquement depuis le main thread</td><td><code>@MainActor final class</code></td><td><code>SongDownloadViewModel</code>, <code>LibraryViewModel</code></td></tr>
+      <tr><td>Partagé, accédé depuis plusieurs contextes async concurrents</td><td><code>actor</code></td><td><code>InMemoryDownloadedSongsRepository</code> (Leçon 7)</td></tr>
+      <tr><td>Immuable, aucune référence partagée nécessaire</td><td><code>struct: Sendable</code></td><td><code>Song</code>, <code>FetchDownloadedSongsUseCase</code></td></tr>
+    </table>
+    <p>Le piège à éviter : ne jamais forcer <code>Sendable</code> sur une classe à état mutable avec <code>@unchecked Sendable</code> pour faire taire le compilateur — ça reporte sur toi une garantie de thread-safety que plus rien ne vérifie. <code>@MainActor</code> pour l'UI et <code>actor</code> pour les types partagés couvrent tous les cas rencontrés dans cette mission.</p>
+  </details>
+
   <h2>Un ViewModel volontairement mince</h2>
-  <p><code>SongDownloadViewModel</code> (Leçon 6) gérait une vraie machine à états (<code>notDownloaded</code> → <code>downloading</code> → <code>downloaded</code>/<code>failed</code>). <code>LibraryViewModel</code> n'a presque aucune logique — et c'est très bien ainsi : son seul travail est de faire le pont asynchrone entre l'acteur du Repository et l'affichage synchrone qu'attend SwiftUI.</p>
+  <p><code>SongDownloadViewModel</code> (Leçon 6) gérait une vraie machine à états (<code>notDownloaded</code> → <code>downloading</code> → <code>downloaded</code>/<code>failed</code>). <code>LibraryViewModel</code> n'a presque aucune logique — et c'est très bien ainsi : son seul travail est de faire le pont asynchrone entre le UseCase de lecture et l'affichage synchrone qu'attend SwiftUI.</p>
 
   <pre><code>@MainActor
 @Observable
 final class LibraryViewModel {
     private(set) var songs: [Song] = []
 
-    private let repository: DownloadedSongsRepository
+    private let fetchDownloadedSongs: FetchDownloadedSongsUseCase
 
-    init(repository: DownloadedSongsRepository) {
-        self.repository = repository
+    init(fetchDownloadedSongs: FetchDownloadedSongsUseCase) {
+        self.fetchDownloadedSongs = fetchDownloadedSongs
     }
 
     func refresh() async {
-        songs = await repository.songs()
+        songs = await fetchDownloadedSongs()
     }
 }</code></pre>
 
-  <p>Toujours pas de valeur par défaut pour <code>repository</code> — même règle qu'en Leçon 7 pour <code>markSongAsDownloaded</code> : ce paramètre doit obligatoirement pointer vers l'instance partagée par toute l'app, jamais vers un repository isolé créé par accident.</p>
+  <p>Toujours pas de valeur par défaut — ni pour <code>repository</code> dans le UseCase, ni pour <code>fetchDownloadedSongs</code> dans le ViewModel : même règle qu'en Leçon 7 et 8, chaque maillon de la chaîne doit obligatoirement pointer vers l'instance partagée par toute l'app, jamais vers une instance isolée créée par accident.</p>
 
   <h2><code>LibraryView</code> : charger, afficher, rafraîchir</h2>
   <pre><code>struct LibraryView: View {
@@ -68,7 +97,9 @@ final class LibraryViewModel {
         }
         .task {
             if viewModel == nil {
-                viewModel = LibraryViewModel(repository: downloadedSongsRepository)
+                viewModel = LibraryViewModel(
+                    fetchDownloadedSongs: FetchDownloadedSongsUseCase(repository: downloadedSongsRepository)
+                )
             }
             await viewModel?.refresh()
         }
@@ -119,11 +150,11 @@ final class LibraryViewModel {
   </div>
 
   <div class="quiz" data-answer="c">
-    <p class="quiz-question">2. Pourquoi <code>LibraryViewModel</code> n'a-t-il pas de valeur par défaut pour son paramètre <code>repository</code> ?</p>
-    <label><input type="radio" name="q2" value="a"> Swift interdit les valeurs par défaut sur les paramètres de type protocole</label>
-    <label><input type="radio" name="q2" value="b"> Un ViewModel ne peut jamais recevoir un acteur en paramètre d'initialiseur</label>
-    <label><input type="radio" name="q2" value="c"> Il doit obligatoirement pointer vers l'unique instance partagée, jamais une instance isolée</label>
-    <label><input type="radio" name="q2" value="d"> Ça obligerait à réécrire le protocole DownloadedSongsRepository à chaque appel</label>
+    <p class="quiz-question">2. Pourquoi <code>LibraryViewModel</code> dépend-il de <code>FetchDownloadedSongsUseCase</code> plutôt que d'appeler <code>downloadedSongsRepository.songs()</code> directement ?</p>
+    <label><input type="radio" name="q2" value="a"> Un acteur ne peut pas être lu directement depuis un type annoté @MainActor</label>
+    <label><input type="radio" name="q2" value="b"> FetchDownloadedSongsUseCase ajoute un cache mémoire absent du Repository lui-même</label>
+    <label><input type="radio" name="q2" value="c"> Un ViewModel ne doit dépendre que de UseCases, jamais directement d'un Repository</label>
+    <label><input type="radio" name="q2" value="d"> Swift interdit d'appeler une méthode d'un acteur depuis une classe @Observable</label>
     <button class="quiz-check">Vérifier</button>
     <p class="quiz-feedback"></p>
   </div>
@@ -148,7 +179,7 @@ final class LibraryViewModel {
     <p class="quiz-feedback"></p>
   </div>
 
-  <p class="ask-teacher">La liste reste vide après un téléchargement, ou le tirer-pour-rafraîchir ne déclenche rien ? Vérifie d'abord que <code>downloadedSongsRepository</code> lu dans <code>LibraryView</code> est bien la même instance que celle injectée dans <code>RootTabView</code> — deux instances distinctes du repository donneraient deux collections distinctes. Demande à ton agent si besoin.</p>
+  <p class="ask-teacher">La liste reste vide après un téléchargement, ou le tirer-pour-rafraîchir ne déclenche rien ? Vérifie d'abord que le <code>downloadedSongsRepository</code> passé à <code>FetchDownloadedSongsUseCase</code> (lecture) et celui passé à <code>DownloadSongUseCase</code> (écriture) sont bien la même instance que celle injectée dans <code>RootTabView</code> — deux instances distinctes du repository donneraient deux collections distinctes. Demande à ton agent si besoin.</p>
 
   <div class="lesson-nav">
     <span><a href="0008-viewmodel-sans-service-direct.html">← Leçon 8 : le ViewModel ne doit pas connaître le Service</a></span>
