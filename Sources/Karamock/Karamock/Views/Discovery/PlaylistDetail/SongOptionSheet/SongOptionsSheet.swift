@@ -10,6 +10,7 @@ import SwiftUI
 struct SongOptionsSheet: View {
     @Environment(\.player) private var player
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.downloadedSongsRepository) private var downloadedSongsRepository
     
     let song: Song
     
@@ -83,7 +84,10 @@ struct SongOptionsSheet: View {
         }
         .task {
             if downloadViewModel == nil {
-                downloadViewModel = SongDownloadViewModel(song: song)
+                downloadViewModel = SongDownloadViewModel(
+                    song: song,
+                    markSongAsDownloaded: DownloadSongUseCase(repository: downloadedSongsRepository)
+                )
             }
         }
     }
