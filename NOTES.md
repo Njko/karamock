@@ -5,4 +5,14 @@
 - Périmètre confirmé avec Nicolas : UI/navigation uniquement, données factices, pas de vrai moteur audio ni de vraie synchronisation de paroles (voir MISSION.md → Out of scope).
 - Mission volontairement séparée d'un autre espace de travail théorique sur SwiftUI/Swift 6 — celle-ci est 100% pratique. Les deux se nourrissent mutuellement mais ne partagent pas les mêmes learning-records.
 - Captures de référence de l'app KaraFun dans `reference/screenshots/` (fournies par Nicolas) : 01-decouvrir (écran d'accueil), 02-playlist-detail (liste de chansons "Les Légendes du Rock"), 03-fiche-chanson (options Karaoké/Battle, tonalité/tempo), 04-lecteur-plein-ecran (paroles + mini-lecteur).
-- Pas encore de premier commit/push sur le dépôt GitHub — à faire quand Nicolas le demandera explicitement.
+- Premier commit poussé sur GitHub ; contenu des leçons 1 à 6 poussé le 2026-07-23 (fusionné avec le vrai projet Xcode que Nicolas pousse depuis son Mac au fur et à mesure, dans `Sources/Karamock/`).
+- Programme confirmé pour la suite (2026-07-23), à ajuster si Nicolas change d'avis :
+  - Leçon 7 — Domain/UseCase : `DownloadSongUseCase`, justifié par la règle "une chanson téléchargée doit apparaître dans la Bibliothèque" (LibraryView, stub vide depuis la Leçon 1).
+  - Leçon 8 — L'onglet Bibliothèque affiche les chansons téléchargées (état partagé, pas mockPlaylists figé).
+  - Leçon 9 — Stratégies d'injection de dépendance en Swift : composition root (`AppDependencies`), injection par constructeur vs par `@Environment`, suppression des valeurs par défaut cachées (ex. `= MockSongDownloadService()` dans l'init du ViewModel).
+  - Leçon 10 — Tests (Swift Testing), rendus faciles par le découplage des Leçons 6-9.
+  - Leçon 11+ — Accessibilité (VoiceOver, Dynamic Type) sur les écrans existants.
+  - En attente, non programmé : sections Quiz/Styles de l'écran Découvrir (annoncées Leçon 1, jamais construites).
+- Convention réelle du projet (vérifiée dans `Sources/Karamock/` le 2026-07-24) : Nicolas a résolu le crash de la Leçon 4 en adoptant `@Entry` (macro EnvironmentValues) + `@Environment(\.player)` (keypath) partout, plutôt que la forme par type `@Environment(PlayerState.self)` enseignée initialement. Les deux mécanismes sont valides s'ils sont utilisés de façon cohérente — suivre **sa** convention réelle (keypath/@Entry) dans les prochaines leçons plutôt que de réintroduire la forme par type.
+- Nommage réel observé à respecter dans les leçons : `MockSongDownloading` (pas `MockSongDownloadService`), dossiers `Domain/`, `Services/`, `ViewModels/`, `Views/` (+ `Views/Model/` pour les structs de données).
+- Retour explicite (2026-07-25) : les mauvaises réponses de quiz ne doivent jamais être nettement plus courtes/moins détaillées que la bonne — ça rend la bonne réponse devinable sans comprendre. Toujours équilibrer la longueur (nombre de mots proche) entre les 4 options, et varier la position de la bonne réponse d'une question à l'autre plutôt que de la mettre systématiquement en "a". Repris de la règle déjà présente dans le skill teach, mais pas assez appliquée en Leçon 7 — vérifier ce point pour chaque futur quiz.

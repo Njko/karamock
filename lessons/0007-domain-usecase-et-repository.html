@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 7 — Domain/UseCase : DownloadSongUseCase</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 7 · Architecture en couches (2/N)</p>
+  <h1>Domain/UseCase : donner un rôle à <code>DownloadSongUseCase</code></h1>
+  <p class="subtitle">La Leçon 6 a délibérément laissé de côté la couche Domain/UseCase, faute de règle métier pour la justifier. On en a une maintenant : une chanson téléchargée doit apparaître dans la Bibliothèque.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> <code>LibraryView</code> affiche "Bibliothèque à venir" depuis la Leçon 1 — un stub jamais rempli. La Leçon 8 va le remplir, mais il faut d'abord décider <em>qui</em> se souvient qu'une chanson a été téléchargée. Ce n'est ni le rôle du <code>Service</code> (qui sait seulement <em>comment</em> télécharger), ni celui du <code>ViewModel</code> (qui gère l'état d'un seul écran) : c'est une règle métier transverse, donc un <code>UseCase</code>.
+  </div>
+
+  <details class="aside">
+    <summary>Sur l'arborescence des dossiers dans cette leçon</summary>
+    <p>Le code ci-dessous ne précise volontairement aucun chemin de fichier. Ton projet a déjà réorganisé <code>Views/</code> par écran (<code>Discovery/</code>, <code>Player/</code>, <code>Library/</code>, <code>Common/</code>) plutôt que par type de fichier — un choix tout à fait valide, que cette leçon ne remet pas en cause. Ce qui compte ici, c'est <strong>qui a le droit de faire quoi</strong> (une vue ne parle jamais directement à un Repository, un Service ne connaît jamais le Repository, etc.) — pas l'emplacement exact des fichiers sur disque. Range <code>DownloadedSongsRepository</code> et <code>DownloadSongUseCase</code> où ça a du sens pour toi — à côté de <code>DownloadState</code>, dans un dossier dédié, peu importe.</p>
+  </details>
+
+  <h2>Repository ≠ Service : deux rôles distincts</h2>
+  <p>Le vocabulaire de <a href="../MISSION.md">MISSION.md</a> distinguait "repository" et "service" — voici la différence concrète appliquée ici :</p>
+  <ul>
+    <li><strong>Service</strong> (<code>SongDownloading</code>, Leçon 6) : sait <em>faire</em> quelque chose — déclencher un téléchargement, appeler un système externe (ici mocké).</li>
+    <li><strong>Repository</strong> (nouveau) : sait <em>retenir</em> une collection d'objets du domaine et y donner accès — ici, les chansons déjà téléchargées.</li>
+  </ul>
+
+  <details class="aside">
+    <summary>Correction : un Repository ne doit pas être <code>@MainActor</code></summary>
+    <p>Une première version de cette leçon isolait <code>DownloadedSongsRepository</code> à <code>@MainActor</code>, pour éviter d'introduire un deuxième mécanisme de concurrence dans l'exercice. C'est une mauvaise pratique dans un vrai projet : le rôle du main actor est de protéger l'UI, pas la couche donnée. Un vrai repository fait potentiellement de l'I/O (disque, réseau, base de données) — le forcer sur le thread principal sérialiserait ce travail derrière l'UI et bloquerait l'app dès que cette I/O devient un peu lente. "Si les utilisateurs le voient, @MainActor ; si seul ton code le voit, un acteur dédié" est la règle de base couramment citée par la communauté Swift (<a href="https://swiftcrafted.dev/article/swift-actors-complete-guide-thread-safe-concurrency">Swift Crafted — "Swift Actors: Concurrency Guide"</a>). Apple va dans le même sens dans sa session sur les acteurs : le main actor sert le travail lié à l'UI, et tout ce qui n'en a pas besoin peut rester <code>nonisolated</code> ou vivre sur son propre acteur (<a href="https://developer.apple.com/videos/play/wwdc2021/10133/">WWDC21 — "Protect mutable state with Swift actors"</a>). La version ci-dessous utilise donc un <code>actor</code> Swift ordinaire plutôt que <code>@MainActor</code>.</p>
+  </details>
+
+  <pre><code>protocol DownloadedSongsRepository: Sendable {
+    func songs() async -> [Song]
+    func add(_ song: Song) async
+}
+
+actor InMemoryDownloadedSongsRepository: DownloadedSongsRepository {
+    private var storage: [Song] = []
+
+    func songs() async -> [Song] {
+        storage
+    }
+
+    func add(_ song: Song) async {
+        guard !storage.contains(song) else { return }
+        storage.append(song)
+    }
+}</code></pre>
+
+  <p><code>actor</code> protège <code>storage</code> exactement comme <code>@MainActor</code> protégeait <code>songs</code> — un seul accès à la fois, jamais deux threads en même temps — mais avec son propre exécuteur, indépendant du thread principal. Le protocole devient <code>Sendable</code> et ses méthodes <code>async</code> : il ne présuppose plus <em>quel</em> acteur protège les données, seulement qu'un appel peut avoir besoin d'attendre. N'importe quelle future implémentation (<code>UserDefaults…</code>, <code>CoreData…</code>, <code>Remote…</code>) reste libre de choisir sa propre stratégie d'isolation sans changer le protocole.</p>
+
+  <p>Le nom de la classe concrète, <code>InMemoryDownloadedSongsRepository</code>, suit une convention courante quand une interface (<code>DownloadedSongsRepository</code>) peut avoir plusieurs implémentations : préfixer par la façon dont les données sont stockées. Rien qu'au nom, sans lire le code, on sait que <code>storage</code> vit uniquement en RAM (un simple tableau) : fermer l'app fait tout oublier. Choix délibéré, cohérent avec le périmètre 100% mocké de la mission — pas une limitation qu'on découvre par accident.</p>
+
+  <h2>Le UseCase : coordonner Service et Repository</h2>
+  <pre><code>struct DownloadSongUseCase: Sendable {
+    let repository: DownloadedSongsRepository
+
+    func callAsFunction(_ song: Song) async {
+        await repository.add(song)
+    }
+}</code></pre>
+
+  <p><code>callAsFunction</code> permet d'appeler une instance comme une fonction — <code>markSongAsDownloaded(song)</code> plutôt que <code>markSongAsDownloaded.execute(song)</code>. C'est purement stylistique (tu peux préférer une méthode nommée), mais c'est une convention fréquente pour les UseCase à une seule responsabilité, qui rend l'intention très lisible à l'appel.</p>
+
+  <p><code>await repository.add(song)</code> : <code>DownloadSongUseCase</code> n'est isolé à aucun acteur (une struct ordinaire), alors que <code>repository.add</code> l'est — à l'acteur propre de <code>InMemoryDownloadedSongsRepository</code> cette fois, plus à <code>@MainActor</code>. Swift exige donc <code>await</code> pour franchir cette frontière. C'est le compilateur qui te protège ici : sans ce garde-fou, deux threads pourraient modifier <code>storage</code> en même temps — et contrairement à la version précédente, ce garde-fou ne coûte plus rien au thread principal.</p>
+
+  <h2>Brancher le UseCase dans le ViewModel existant</h2>
+  <p>Le ViewModel de la Leçon 6 gagne un second paramètre injecté, au même titre que <code>service</code> — mais <strong>sans valeur par défaut</strong> :</p>
+
+  <pre><code>@MainActor
+@Observable
+final class SongDownloadViewModel {
+    private(set) var state: DownloadState = .notDownloaded
+
+    private let song: Song
+    private let service: SongDownloading
+    private let markSongAsDownloaded: DownloadSongUseCase
+
+    init(
+        song: Song,
+        service: SongDownloading = MockSongDownloading(),
+        markSongAsDownloaded: DownloadSongUseCase
+    ) {
+        self.song = song
+        self.service = service
+        self.markSongAsDownloaded = markSongAsDownloaded
+    }
+
+    func startDownload() {
+        guard state == .notDownloaded || state == .failed else { return }
+        state = .downloading(progress: 0)
+        Task {
+            for await progress in service.download(song) {
+                state = .downloading(progress: progress)
+            }
+            await markSongAsDownloaded(song)
+            state = .downloaded
+        }
+    }
+}</code></pre>
+
+  <details class="aside">
+    <summary>Pourquoi <code>service</code> a une valeur par défaut mais pas <code>markSongAsDownloaded</code> ?</summary>
+    <p><code>MockSongDownloading()</code> est sans état et interchangeable : peu importe l'instance, le comportement est identique. <code>DownloadSongUseCase</code>, lui, doit obligatoirement pointer vers <strong>la même instance partagée</strong> de <code>DownloadedSongsRepository</code> que celle que <code>LibraryView</code> lira (Leçon 8) — une valeur par défaut créerait silencieusement un repository isolé, et la chanson téléchargée n'apparaîtrait jamais dans la Bibliothèque, sans la moindre erreur pour te le signaler. Un paramètre obligatoire force l'appelant à réfléchir à la bonne instance. On reviendra sur ce genre de risque en Leçon 9.</p>
+  </details>
+
+  <h2>Où vit l'instance partagée, pour l'instant</h2>
+  <p>En attendant la Leçon 9, on suit exactement le même schéma déjà en place pour <code>player</code> — un <code>@State</code> dans <code>RootTabView</code>, exposé via <code>@Entry</code> :</p>
+
+  <pre><code>extension EnvironmentValues {
+    @Entry var player = PlayerState()
+    @Entry var downloadedSongsRepository: DownloadedSongsRepository = InMemoryDownloadedSongsRepository()
+}
+
+struct RootTabView: View {
+    @State var player = PlayerState()
+    @State var downloadedSongsRepository = InMemoryDownloadedSongsRepository()
+
+    var body: some View {
+        TabView {
+            DiscoveryView()
+                .tabItem { Label("Découvrir", systemImage: "book.closed.fill") }
+            LibraryView()
+                .tabItem { Label("Bibliothèque", systemImage: "music.note.list") }
+        }
+        .environment(\.player, player)
+        .environment(\.downloadedSongsRepository, downloadedSongsRepository)
+        // ... .overlay et .fullScreenCover inchangés
+    }
+}</code></pre>
+
+  <p>Et <code>SongOptionsSheet</code> lit ce repository pour construire le UseCase, au même endroit où il construisait déjà le ViewModel :</p>
+
+  <pre><code>struct SongOptionsSheet: View {
+    @Environment(\.player) private var player
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.downloadedSongsRepository) private var downloadedSongsRepository
+
+    let song: Song
+    @State private var downloadViewModel: SongDownloadViewModel?
+    // ... @State existants inchangés (mode, singerName, adjustVolumes, pitch, tempo)
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                SongHeader(song: song)
+
+                if let downloadViewModel {
+                    DownloadButton(state: downloadViewModel.state, startDownload: downloadViewModel.startDownload)
+                }
+
+                // ... ModeCard, TextField, Toggle, Sliders, boutons inchangés
+            }
+            .padding()
+        }
+        .task {
+            if downloadViewModel == nil {
+                downloadViewModel = SongDownloadViewModel(
+                    song: song,
+                    markSongAsDownloaded: DownloadSongUseCase(repository: downloadedSongsRepository)
+                )
+            }
+        }
+    }
+}</code></pre>
+
+  <p>Rien à changer dans <code>DownloadButton</code> lui-même : il ne connaît que <code>DownloadState</code> et une closure, jamais le ViewModel ni le UseCase — cette séparation, déjà en place dans ton code, est exactement le genre de découplage que cette leçon généralise à la couche du dessous.</p>
+
+  <details class="aside">
+    <summary>Deux <code>@Entry</code> à la main, ça commence à sentir le problème</summary>
+    <p><code>RootTabView</code> accumule maintenant un <code>@State</code> + une ligne <code>.environment(\.xxx, xxx)</code> par dépendance partagée. Ça fonctionne, mais ça ne passera pas à l'échelle indéfiniment : chaque nouvelle dépendance (un futur repository de playlists, un service d'authentification…) répète le même geste manuel, et rien n'empêche d'oublier une injection dans une Preview ou un test. C'est exactement le problème que la Leçon 9 (stratégies d'injection de dépendance) va résoudre avec un composition root unique.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Conséquence pour la Leçon 8 : lire un repository-acteur n'est plus synchrone</summary>
+    <p><code>DownloadedSongsRepository.songs()</code> est maintenant <code>async</code> — <code>LibraryView</code> ne pourra plus lire <code>repository.songs</code> comme une simple propriété stockée. Elle devra l'<code>await</code>, typiquement dans un <code>.task</code>, comme <code>SongOptionsSheet</code> le fait déjà pour construire son ViewModel. C'est le prix normal d'un repository correctement isolé — on verra en Leçon 8 comment la Bibliothèque se tient à jour proprement.</p>
+  </details>
+
+  <h2>Table de traduction (compléments)</h2>
+  <table class="compare-table">
+    <tr><th>Concept général</th><th>Ici</th></tr>
+    <tr><td>Repository (persistance/collection d'objets domaine)</td><td><code>DownloadedSongsRepository</code> / <code>InMemoryDownloadedSongsRepository</code></td></tr>
+    <tr><td>UseCase / Interactor (règle métier, orchestration)</td><td><code>DownloadSongUseCase</code></td></tr>
+    <tr><td><code>Callable</code> (Python) / <code>invoke()</code> (Kotlin)</td><td><code>callAsFunction</code> (Swift)</td></tr>
+    <tr><td>Appel synchronisé (<code>synchronized</code>/verrou manuel)</td><td><code>actor</code> dédié + <code>await</code> au point de franchissement</td></tr>
+    <tr><td>Réserver le thread UI aux seules mises à jour d'écran</td><td><code>@MainActor</code> pour les ViewModels, <code>actor</code>/<code>nonisolated</code> pour Repository/Service</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    Doc officielle Apple : <a href="https://developer.apple.com/documentation/swift/mainactor"><code>MainActor</code></a>, <a href="https://developer.apple.com/documentation/swift/actor"><code>actor</code></a>, <a href="https://developer.apple.com/videos/play/wwdc2021/10133/">WWDC21 — "Protect mutable state with Swift actors"</a> (le main actor sert l'UI ; le reste peut être <code>nonisolated</code> ou vivre sur son propre acteur). Sur le choix entre <code>@MainActor</code> et acteur dédié pour une couche donnée, <a href="https://swiftcrafted.dev/article/swift-actors-complete-guide-thread-safe-concurrency">Swift Crafted — "Swift Actors: Concurrency Guide"</a> et <a href="https://www.donnywals.com/should-you-opt-in-to-swift-6-2s-main-actor-isolation/">Donny Wals — sur l'isolation par défaut au main actor en Swift 6.2</a>. Sur la séparation Repository/UseCase elle-même, la communauté iOS s'appuie surtout sur la littérature Clean Architecture générale (Robert C. Martin) adaptée à Swift — pas de doc Apple dédiée, à prendre avec un regard critique sur ce qui vaut vraiment la peine pour une app de cette taille.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi <code>DownloadSongUseCase</code> plutôt que d'ajouter directement l'appel au repository dans <code>SongDownloadViewModel.startDownload()</code> ?</p>
+    <label><input type="radio" name="q1" value="a"> Un ViewModel ne peut jamais invoquer directement une méthode d'un Repository</label>
+    <label><input type="radio" name="q1" value="b"> callAsFunction impose que le type conforme obligatoirement au protocole Sendable</label>
+    <label><input type="radio" name="q1" value="c"> Isoler la règle métier dans un composant réutilisable, testable indépendamment de l'écran</label>
+    <label><input type="radio" name="q1" value="d"> Ça diminue légèrement la taille du binaire final généré par Xcode</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Quelle est la différence de rôle entre <code>SongDownloading</code> (Service) et <code>DownloadedSongsRepository</code> (Repository) ?</p>
+    <label><input type="radio" name="q2" value="a"> Aucune différence réelle, ce sont simplement deux noms interchangeables pour l'identique</label>
+    <label><input type="radio" name="q2" value="b"> Le Repository s'exécute toujours plus rapidement en mémoire que le Service</label>
+    <label><input type="radio" name="q2" value="c"> Le Service doit obligatoirement être marqué @Observable, jamais le Repository correspondant</label>
+    <label><input type="radio" name="q2" value="d"> Le Service exécute une action externe ; le Repository retient une collection d'objets</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">3. Pourquoi <code>await</code> est-il nécessaire devant <code>repository.add(song)</code> dans le UseCase ?</p>
+    <label><input type="radio" name="q3" value="a"> C'est une erreur du compilateur, await n'a ici aucune utilité réelle</label>
+    <label><input type="radio" name="q3" value="b"> add appartient à l'acteur du repository ; le UseCase n'appartient à aucun acteur</label>
+    <label><input type="radio" name="q3" value="c"> Toute méthode d'un Repository exige await par simple convention de style</label>
+    <label><input type="radio" name="q3" value="d"> await n'est syntaxiquement obligatoire qu'à l'intérieur des types struct Swift</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">4. Pourquoi <code>InMemoryDownloadedSongsRepository</code> est-il un <code>actor</code> plutôt que marqué <code>@MainActor</code> ?</p>
+    <label><input type="radio" name="q4" value="a"> @MainActor s'applique uniquement aux types struct Swift, jamais aux classes</label>
+    <label><input type="radio" name="q4" value="b"> Un actor Swift s'exécute systématiquement plus vite qu'une classe @MainActor</label>
+    <label><input type="radio" name="q4" value="c"> Un repository fait de l'I/O ; l'isoler au thread principal bloquerait l'UI</label>
+    <label><input type="radio" name="q4" value="d"> Les deux s'exécutent de façon rigoureusement identique, sans différence pratique</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Une erreur de concurrence apparaît sur <code>repository.add</code>, ou le UseCase ne compile pas ? Colle le message exact à ton agent — la frontière d'acteur ici est volontairement stricte, l'erreur pointe généralement vers l'endroit exact où <code>await</code> manque.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0006-viewmodel-et-service-telechargement.html">← Leçon 6 : ViewModel et Service (télécharger une chanson)</a></span>
+    <span>Leçon suivante : l'onglet Bibliothèque affiche les chansons téléchargées</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
