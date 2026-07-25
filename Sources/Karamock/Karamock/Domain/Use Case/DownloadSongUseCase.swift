@@ -6,9 +6,26 @@
 //
 
 struct DownloadSongUseCase: Sendable {
+    let service: SongDownloading
     let repository: DownloadedSongsRepository
     
-    func callAsFunction(_ song: Song) async {
-        await repository.add(song)
+    init(
+        service: SongDownloading = MockSongDownloading(),
+        repository: DownloadedSongsRepository
+    ) {
+        self.service = service
+        self.repository = repository
+    }
+    
+    func callAsFunction(_ song: Song) -> AsyncStream<Double> {
+        AsyncStream { continuation in
+            Task {
+                for await progress in service.download(song) {
+                    continuation.yield(progress)
+                }
+                await repository.add(song)
+                continuation.finish()
+            }
+        }
     }
 }

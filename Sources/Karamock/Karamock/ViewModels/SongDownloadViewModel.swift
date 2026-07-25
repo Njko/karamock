@@ -13,27 +13,23 @@ final class SongDownloadViewModel {
     private(set) var state: DownloadState = .notDownloaded
     
     private let song : Song
-    private let service: SongDownloading
-    private let markSongAsDownloaded: DownloadSongUseCase
+    private let downloadSong: DownloadSongUseCase
     
     init(
         song: Song,
-        service: SongDownloading = MockSongDownloading(),
-        markSongAsDownloaded: DownloadSongUseCase
+        downloadSong: DownloadSongUseCase
     ) {
         self.song = song
-        self.service = service
-        self.markSongAsDownloaded = markSongAsDownloaded
+        self.downloadSong = downloadSong
     }
     
     func startDownload() {
         guard state == .notDownloaded || state == .failed else { return }
         state = .downloading(progress: 0)
         Task {
-            for await progress in service.download(song) {
+            for await progress in downloadSong(song) {
                 state = .downloading(progress: progress)
             }
-            await markSongAsDownloaded(song)
             state = .downloaded
         }
     }
