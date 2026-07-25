@@ -10,14 +10,20 @@ import Foundation
 @MainActor
 @Observable
 final class SongDownloadViewModel {
-    private (set) var state: DownloadState = .notDownloaded
+    private(set) var state: DownloadState = .notDownloaded
     
     private let song : Song
     private let service: SongDownloading
+    private let markSongAsDownloaded: DownloadSongUseCase
     
-    init(song: Song, service: SongDownloading = MockSongDownloading()) {
+    init(
+        song: Song,
+        service: SongDownloading = MockSongDownloading(),
+        markSongAsDownloaded: DownloadSongUseCase
+    ) {
         self.song = song
         self.service = service
+        self.markSongAsDownloaded = markSongAsDownloaded
     }
     
     func startDownload() {
@@ -27,6 +33,7 @@ final class SongDownloadViewModel {
             for await progress in service.download(song) {
                 state = .downloading(progress: progress)
             }
+            await markSongAsDownloaded(song)
             state = .downloaded
         }
     }
