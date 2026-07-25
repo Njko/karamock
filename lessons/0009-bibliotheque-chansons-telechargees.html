@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 9 — L'onglet Bibliothèque</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 9 · Architecture en couches (4/N)</p>
+  <h1>L'onglet Bibliothèque affiche les chansons téléchargées</h1>
+  <p class="subtitle">Boucle bouclée : la Leçon 7 a donné un sens à <code>DownloadedSongsRepository</code>, mais rien ne le lisait encore. On branche enfin <code>LibraryView</code> — stub vide depuis la Leçon 1 — dessus.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> jusqu'ici, le Repository de la Leçon 7 n'était écrit que d'un seul côté (<code>DownloadSongUseCase</code> y ajoute des chansons). Un repository qu'on ne lit jamais n'a aucune valeur observable — cette leçon ferme la boucle en lisant réellement <code>downloadedSongsRepository.songs()</code> et en l'affichant. C'est aussi la première vue de la mission qui consomme un acteur asynchrone plutôt qu'un simple <code>@State</code> local.
+  </div>
+
+  <h2>Un ViewModel volontairement mince</h2>
+  <p><code>SongDownloadViewModel</code> (Leçon 6) gérait une vraie machine à états (<code>notDownloaded</code> → <code>downloading</code> → <code>downloaded</code>/<code>failed</code>). <code>LibraryViewModel</code> n'a presque aucune logique — et c'est très bien ainsi : son seul travail est de faire le pont asynchrone entre l'acteur du Repository et l'affichage synchrone qu'attend SwiftUI.</p>
+
+  <pre><code>@MainActor
+@Observable
+final class LibraryViewModel {
+    private(set) var songs: [Song] = []
+
+    private let repository: DownloadedSongsRepository
+
+    init(repository: DownloadedSongsRepository) {
+        self.repository = repository
+    }
+
+    func refresh() async {
+        songs = await repository.songs()
+    }
+}</code></pre>
+
+  <p>Toujours pas de valeur par défaut pour <code>repository</code> — même règle qu'en Leçon 7 pour <code>markSongAsDownloaded</code> : ce paramètre doit obligatoirement pointer vers l'instance partagée par toute l'app, jamais vers un repository isolé créé par accident.</p>
+
+  <h2><code>LibraryView</code> : charger, afficher, rafraîchir</h2>
+  <pre><code>struct LibraryView: View {
+    @Environment(\.downloadedSongsRepository) private var downloadedSongsRepository
+    @State private var viewModel: LibraryViewModel?
+    @State private var selectedSong: Song?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let viewModel, !viewModel.songs.isEmpty {
+                    List(viewModel.songs) { song in
+                        Button {
+                            selectedSong = song
+                        } label: {
+                            SongRow(song: song)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .listStyle(.plain)
+                } else {
+                    ContentUnavailableView(
+                        "Aucune chanson téléchargée",
+                        systemImage: "arrow.down.circle",
+                        description: Text("Télécharge une chanson depuis sa fiche pour la retrouver ici.")
+                    )
+                }
+            }
+            .navigationTitle("Bibliothèque")
+        }
+        .task {
+            if viewModel == nil {
+                viewModel = LibraryViewModel(repository: downloadedSongsRepository)
+            }
+            await viewModel?.refresh()
+        }
+        .refreshable {
+            await viewModel?.refresh()
+        }
+        .sheet(item: $selectedSong) { song in
+            SongOptionsSheet(song: song)
+        }
+    }
+}</code></pre>
+
+  <p>Taper une chanson dans la Bibliothèque rouvre <code>SongOptionsSheet</code> via <code>.sheet(item:)</code> — exactement le mécanisme de la Leçon 3 dans <code>PlaylistDetailView</code>. Rien de neuf à écrire : c'est le même <code>selectedSong: Song?</code> optionnel comme source de vérité, appliqué à un deuxième écran.</p>
+
+  <details class="aside">
+    <summary>Pourquoi <code>.task</code> suffit à rafraîchir la liste sans <code>.onAppear</code> séparé</summary>
+    <p><code>.task</code> ne se contente pas de démarrer une fois "pour toujours" : son bloc se relance à <strong>chaque réapparition</strong> de la vue à laquelle il est attaché, et s'annule à chaque disparition. Changer d'onglet puis revenir sur Bibliothèque fait donc réapparaître <code>LibraryView</code>, ce qui relance <code>.task</code> — <code>viewModel</code> existe déjà (la condition <code>if viewModel == nil</code> saute), mais <code>await viewModel?.refresh()</code> s'exécute quand même à chaque fois. C'est ce qui garde la liste à jour après un téléchargement fait depuis l'onglet Découvrir, sans mécanisme de notification explicite entre les deux écrans.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Pourquoi le Preview de cette vue ne plante pas sans injection explicite</summary>
+    <p>Contrairement à la mésaventure de la Leçon 4 (<code>@Environment(Type.self)</code>, qui exige un ancêtre explicite sous peine de crash), <code>@Environment(\.downloadedSongsRepository)</code> passe par <code>@Entry</code>, qui porte toujours une valeur par défaut (<code>InMemoryDownloadedSongsRepository()</code>, vide). Une Preview de <code>LibraryView</code> sans <code>.environment(\.downloadedSongsRepository, …)</code> explicite affichera donc simplement l'état vide (<code>ContentUnavailableView</code>) plutôt que de planter — un des avantages concrets d'avoir adopté la forme par keypath partout dans ce projet.</p>
+  </details>
+
+  <h2>Table de traduction (compléments)</h2>
+  <table class="compare-table">
+    <tr><th>UIKit</th><th>SwiftUI</th></tr>
+    <tr><td><code>UIRefreshControl</code> + target-action</td><td><code>.refreshable { await … }</code></td></tr>
+    <tr><td>Vue custom "aucun résultat" bricolée à la main</td><td><code>ContentUnavailableView</code></td></tr>
+    <tr><td><code>viewWillAppear</code> pour recharger les données à chaque retour</td><td><code>.task</code>, relancé à chaque réapparition de la vue</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    Doc officielle Apple : <a href="https://developer.apple.com/documentation/swiftui/view/refreshable(action:)"><code>refreshable(action:)</code></a>, <a href="https://developer.apple.com/documentation/swiftui/contentunavailableview"><code>ContentUnavailableView</code></a>, <a href="https://developer.apple.com/documentation/swiftui/view/task(priority:_:)"><code>task(priority:_:)</code></a> (section "Task lifetime" pour le comportement à chaque réapparition).
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi <code>await viewModel?.refresh()</code> s'exécute-t-il à chaque retour sur l'onglet Bibliothèque ?</p>
+    <label><input type="radio" name="q1" value="a"> Une List SwiftUI relance automatiquement tous ses modificateurs à chaque nouvel affichage</label>
+    <label><input type="radio" name="q1" value="b"> Le modificateur .task se relance à chaque réapparition de la vue associée</label>
+    <label><input type="radio" name="q1" value="c"> TabView recrée entièrement l'instance de LibraryView à chaque changement d'onglet</label>
+    <label><input type="radio" name="q1" value="d"> Un acteur republie automatiquement ses valeurs vers toute vue qui l'observe</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">2. Pourquoi <code>LibraryViewModel</code> n'a-t-il pas de valeur par défaut pour son paramètre <code>repository</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> Swift interdit les valeurs par défaut sur les paramètres de type protocole</label>
+    <label><input type="radio" name="q2" value="b"> Un ViewModel ne peut jamais recevoir un acteur en paramètre d'initialiseur</label>
+    <label><input type="radio" name="q2" value="c"> Il doit obligatoirement pointer vers l'unique instance partagée, jamais une instance isolée</label>
+    <label><input type="radio" name="q2" value="d"> Ça obligerait à réécrire le protocole DownloadedSongsRepository à chaque appel</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. À quoi sert le modificateur <code>.refreshable</code> sur la liste de la Bibliothèque ?</p>
+    <label><input type="radio" name="q3" value="a"> Ajouter le geste de tirer-pour-rafraîchir, qui relance une closure asynchrone fournie</label>
+    <label><input type="radio" name="q3" value="b"> Forcer SwiftUI à revalider le type Song à chaque nouvelle apparition</label>
+    <label><input type="radio" name="q3" value="c"> Empêcher deux téléchargements simultanés de la même chanson dans la liste</label>
+    <label><input type="radio" name="q3" value="d"> Trier automatiquement les chansons par ordre alphabétique dans la liste affichée</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">4. Pourquoi taper une chanson dans la Bibliothèque peut réutiliser <code>.sheet(item:)</code> + <code>SongOptionsSheet</code> sans code nouveau ?</p>
+    <label><input type="radio" name="q4" value="a"> SongRow gère en interne l'ouverture de la feuille modale correspondante</label>
+    <label><input type="radio" name="q4" value="b"> SongOptionsSheet détecte automatiquement depuis quel écran il a été ouvert</label>
+    <label><input type="radio" name="q4" value="c"> Song a été rendue Observable spécifiquement pour permettre cette réutilisation</label>
+    <label><input type="radio" name="q4" value="d"> Le même mécanisme, item optionnel + sheet, avait déjà servi en Leçon 3</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">La liste reste vide après un téléchargement, ou le tirer-pour-rafraîchir ne déclenche rien ? Vérifie d'abord que <code>downloadedSongsRepository</code> lu dans <code>LibraryView</code> est bien la même instance que celle injectée dans <code>RootTabView</code> — deux instances distinctes du repository donneraient deux collections distinctes. Demande à ton agent si besoin.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0008-viewmodel-sans-service-direct.html">← Leçon 8 : le ViewModel ne doit pas connaître le Service</a></span>
+    <span>Leçon suivante : stratégies d'injection de dépendance en Swift</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

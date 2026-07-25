@@ -6,12 +6,13 @@
 - Mission volontairement séparée d'un autre espace de travail théorique sur SwiftUI/Swift 6 — celle-ci est 100% pratique. Les deux se nourrissent mutuellement mais ne partagent pas les mêmes learning-records.
 - Captures de référence de l'app KaraFun dans `reference/screenshots/` (fournies par Nicolas) : 01-decouvrir (écran d'accueil), 02-playlist-detail (liste de chansons "Les Légendes du Rock"), 03-fiche-chanson (options Karaoké/Battle, tonalité/tempo), 04-lecteur-plein-ecran (paroles + mini-lecteur).
 - Premier commit poussé sur GitHub ; contenu des leçons 1 à 6 poussé le 2026-07-23 (fusionné avec le vrai projet Xcode que Nicolas pousse depuis son Mac au fur et à mesure, dans `Sources/Karamock/`).
-- Programme confirmé pour la suite (2026-07-23), à ajuster si Nicolas change d'avis :
-  - Leçon 7 — Domain/UseCase : `DownloadSongUseCase`, justifié par la règle "une chanson téléchargée doit apparaître dans la Bibliothèque" (LibraryView, stub vide depuis la Leçon 1).
-  - Leçon 8 — L'onglet Bibliothèque affiche les chansons téléchargées (état partagé, pas mockPlaylists figé).
-  - Leçon 9 — Stratégies d'injection de dépendance en Swift : composition root (`AppDependencies`), injection par constructeur vs par `@Environment`, suppression des valeurs par défaut cachées (ex. `= MockSongDownloadService()` dans l'init du ViewModel).
-  - Leçon 10 — Tests (Swift Testing), rendus faciles par le découplage des Leçons 6-9.
-  - Leçon 11+ — Accessibilité (VoiceOver, Dynamic Type) sur les écrans existants.
+- Programme confirmé pour la suite (mis à jour 2026-07-26 après insertion de la Leçon 8 de nettoyage), à ajuster si Nicolas change d'avis :
+  - Leçon 7 — Domain/UseCase : `DownloadSongUseCase`, justifié par la règle "une chanson téléchargée doit apparaître dans la Bibliothèque" (LibraryView, stub vide depuis la Leçon 1). Fait.
+  - Leçon 8 — Nettoyage : retrait de `service: SongDownloading` de `SongDownloadViewModel`, absorbé dans `DownloadSongUseCase` (Dependency Rule, repéré par Nicolas). Fait.
+  - Leçon 9 — L'onglet Bibliothèque affiche les chansons téléchargées (état partagé, pas mockPlaylists figé). Écrite, pas encore faite par Nicolas.
+  - Leçon 10 — Stratégies d'injection de dépendance en Swift : composition root (`AppDependencies`), injection par constructeur vs par `@Environment`, suppression des valeurs par défaut cachées.
+  - Leçon 11 — Tests (Swift Testing), rendus faciles par le découplage des Leçons 6-10.
+  - Leçon 12+ — Accessibilité (VoiceOver, Dynamic Type) sur les écrans existants.
   - En attente, non programmé : sections Quiz/Styles de l'écran Découvrir (annoncées Leçon 1, jamais construites).
 - Convention réelle du projet (vérifiée dans `Sources/Karamock/` le 2026-07-24) : Nicolas a résolu le crash de la Leçon 4 en adoptant `@Entry` (macro EnvironmentValues) + `@Environment(\.player)` (keypath) partout, plutôt que la forme par type `@Environment(PlayerState.self)` enseignée initialement. Les deux mécanismes sont valides s'ils sont utilisés de façon cohérente — suivre **sa** convention réelle (keypath/@Entry) dans les prochaines leçons plutôt que de réintroduire la forme par type.
 - Nommage réel observé à respecter dans les leçons : `MockSongDownloading` (pas `MockSongDownloadService`), dossiers `Domain/`, `Services/`, `ViewModels/`, `Views/` (+ `Views/Model/` pour les structs de données).

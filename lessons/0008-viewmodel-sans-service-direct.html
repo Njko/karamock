@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 8 — Le ViewModel ne doit pas connaître le Service</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 8 · Architecture en couches (3/N) — nettoyage</p>
+  <h1>Le ViewModel ne doit pas connaître le Service</h1>
+  <p class="subtitle">Un rattrapage avant d'aller plus loin : <code>SongDownloadViewModel</code> dépend encore directement de <code>SongDownloading</code>, en plus du <code>DownloadSongUseCase</code> de la Leçon 7. Ce sont deux façons différentes d'accéder à de la donnée externe dans la même classe — la règle de dépendance de la Clean Architecture dit que ça ne devrait pas être le cas.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> depuis la Leçon 6, <code>SongDownloadViewModel</code> tient à la fois <code>service: SongDownloading</code> (Leçon 6) et <code>markSongAsDownloaded: DownloadSongUseCase</code> (Leçon 7). Le second respecte la règle "présentation → domaine" ; le premier la contourne. Avant d'ajouter la Leçon 9 (injection de dépendance) par-dessus cette incohérence, on la corrige : plus aucune dépendance du ViewModel ne pointera directement vers un Service.
+  </div>
+
+  <h2>La règle de dépendance, et où elle est violée ici</h2>
+  <p>Le texte fondateur de la Clean Architecture (Robert C. Martin) pose une seule règle structurante : <em>les dépendances de code source ne peuvent pointer que vers l'intérieur</em> — une couche externe (UI, réseau, disque) ne doit jamais être visible directement par une couche plus interne qu'elle ne devrait connaître. Appliquée ici : le ViewModel (couche présentation) ne devrait parler qu'au Domain (UseCase), jamais directement à un Service (couche externe, même mockée).</p>
+
+  <pre><code>// État actuel (Leçons 6-7) — deux chemins d'accès à de la donnée externe
+@MainActor
+@Observable
+final class SongDownloadViewModel {
+    private let service: SongDownloading              // ← accès direct au Service
+    private let markSongAsDownloaded: DownloadSongUseCase  // ← accès via le Domain
+
+    func startDownload() {
+        Task {
+            for await progress in service.download(song) {  // ← Service appelé directement
+                state = .downloading(progress: progress)
+            }
+            await markSongAsDownloaded(song)
+            state = .downloaded
+        }
+    }
+}</code></pre>
+
+  <p><code>service</code> et <code>markSongAsDownloaded</code> sont deux frontières différentes dans la même classe : l'une respecte la règle de dépendance, l'autre non. Un lecteur qui découvre ce code est en droit de demander pourquoi ce n'est pas cohérent.</p>
+
+  <h2>Absorber le Service dans le UseCase</h2>
+  <p><code>DownloadSongUseCase</code> représente déjà "télécharger une chanson" comme intention métier — il lui manquait juste la partie "obtenir la progression". Un UseCase peut légitimement orchestrer plusieurs dépendances (ici Service <em>et</em> Repository) tant qu'elles servent une seule intention utilisateur :</p>
+
+  <pre><code>struct DownloadSongUseCase: Sendable {
+    let service: SongDownloading
+    let repository: DownloadedSongsRepository
+
+    init(
+        service: SongDownloading = MockSongDownloading(),
+        repository: DownloadedSongsRepository
+    ) {
+        self.service = service
+        self.repository = repository
+    }
+
+    func callAsFunction(_ song: Song) -> AsyncStream&lt;Double&gt; {
+        AsyncStream { continuation in
+            Task {
+                for await progress in service.download(song) {
+                    continuation.yield(progress)
+                }
+                await repository.add(song)
+                continuation.finish()
+            }
+        }
+    }
+}</code></pre>
+
+  <p><code>service</code> retrouve sa valeur par défaut (interchangeable, sans état — la règle de la Leçon 7). <code>repository</code> reste obligatoire, toujours pour la même raison : il doit pointer vers l'instance partagée. Le UseCase absorbe le flux de progression <em>et</em> l'enregistrement dans la Bibliothèque — une seule sortie (<code>AsyncStream&lt;Double&gt;</code>), un seul point d'entrée pour le ViewModel.</p>
+
+  <details class="aside">
+    <summary><code>continuation.yield</code> depuis un <code>Task</code> non isolé — pourquoi c'est sûr</summary>
+    <p>Le <code>Task</code> créé dans <code>AsyncStream { continuation in Task { … } }</code> n'hérite d'aucun acteur particulier (<code>DownloadSongUseCase</code> est une struct ordinaire). Ça ne pose pas de problème : <code>AsyncStream.Continuation</code> est explicitement conçu pour être appelé depuis n'importe quel contexte de concurrence, y compris concurremment — c'est tout l'intérêt du type. Le seul endroit qui a besoin d'un <code>await</code> explicite reste <code>repository.add(song)</code>, puisque lui est isolé à son propre acteur.</p>
+  </details>
+
+  <h2>Le ViewModel : une seule dépendance externe</h2>
+  <pre><code>@MainActor
+@Observable
+final class SongDownloadViewModel {
+    private(set) var state: DownloadState = .notDownloaded
+
+    private let song: Song
+    private let downloadSong: DownloadSongUseCase
+
+    init(song: Song, downloadSong: DownloadSongUseCase) {
+        self.song = song
+        self.downloadSong = downloadSong
+    }
+
+    func startDownload() {
+        guard state == .notDownloaded || state == .failed else { return }
+        state = .downloading(progress: 0)
+        Task {
+            for await progress in downloadSong(song) {
+                state = .downloading(progress: progress)
+            }
+            state = .downloaded
+        }
+    }
+}</code></pre>
+
+  <p><code>service</code> a disparu de la liste des propriétés du ViewModel — il ne connaît plus que <code>DownloadSongUseCase</code>. La forme du <code>startDownload()</code> ne change presque pas (toujours un <code>Task</code>, toujours un <code>for await</code>), mais le nom de ce qu'il consomme change de sens : avant, un flux technique venu du Service ; maintenant, une intention métier complète.</p>
+
+  <h2>Le seul appelant à mettre à jour : <code>SongOptionsSheet</code></h2>
+  <pre><code>.task {
+    if downloadViewModel == nil {
+        downloadViewModel = SongDownloadViewModel(
+            song: song,
+            downloadSong: DownloadSongUseCase(repository: downloadedSongsRepository)
+        )
+    }
+}</code></pre>
+
+  <p><code>DownloadSongUseCase(repository:)</code> — <code>service</code> retombe sur sa valeur par défaut, comme avant. C'est le seul endroit de tout le projet qui a besoin d'être modifié pour ce refactoring : la preuve concrète que cacher le Service derrière le UseCase a réduit, pas augmenté, le nombre d'endroits à connaître.</p>
+
+  <h2>Table de traduction (compléments)</h2>
+  <table class="compare-table">
+    <tr><th>Concept général</th><th>Ici</th></tr>
+    <tr><td>Dependency Rule (Clean Architecture, Robert C. Martin)</td><td>ViewModel → UseCase uniquement, jamais → Service directement</td></tr>
+    <tr><td>Façade / orchestration de plusieurs dépendances externes</td><td><code>DownloadSongUseCase</code> orchestrant Service + Repository</td></tr>
+    <tr><td>Mock à fournir pour tester le ViewModel</td><td>Un seul (<code>DownloadSongUseCase</code>), au lieu de deux (<code>service</code> + <code>markSongAsDownloaded</code>)</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html">Robert C. Martin — "The Clean Architecture"</a> (l'article fondateur, section "The Dependency Rule"). Application concrète à iOS/MVVM : <a href="https://tech.olx.com/clean-architecture-and-mvvm-on-ios-c9d167d9f5b3">OLX Engineering — "Clean Architecture and MVVM on iOS" (Oleh Kudinov)</a>, largement cité comme référence dans la communauté iOS pour ce découpage précis (ViewModel → UseCase → Repository).
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi <code>SongDownloadViewModel</code> dépendant directement de <code>SongDownloading</code> (le Service) était-il une entorse à la Clean Architecture ?</p>
+    <label><input type="radio" name="q1" value="a"> Un ViewModel ne peut techniquement jamais importer un protocole marqué Sendable</label>
+    <label><input type="radio" name="q1" value="b"> La règle de dépendance veut que la présentation ne parle qu'au domaine</label>
+    <label><input type="radio" name="q1" value="c"> SongDownloading aurait dû être déclaré comme une classe plutôt qu'un protocole</label>
+    <label><input type="radio" name="q1" value="d"> Ça ralentit sensiblement l'exécution du téléchargement simulé à chaque appel</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">2. Après ce refactoring, quelle est la seule dépendance externe que connaît encore <code>SongDownloadViewModel</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> InMemoryDownloadedSongsRepository, appelée directement sans passer par un quelconque protocole</label>
+    <label><input type="radio" name="q2" value="b"> MockSongDownloading, toujours injecté directement depuis la vue SongOptionsSheet elle-même</label>
+    <label><input type="radio" name="q2" value="c"> DownloadSongUseCase, qui encapsule désormais le Service et le Repository</label>
+    <label><input type="radio" name="q2" value="d"> Aucune, tout l'état est désormais calculé localement sans dépendance externe</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi le <code>Task</code> interne à <code>DownloadSongUseCase.callAsFunction</code> peut-il appeler <code>continuation.yield</code> sans risque, bien qu'il ne soit isolé à aucun acteur ?</p>
+    <label><input type="radio" name="q3" value="a"> AsyncStream force silencieusement tout appelant sur le MainActor par défaut</label>
+    <label><input type="radio" name="q3" value="b"> Le Service SongDownloading est lui-même marqué @MainActor depuis la Leçon 6</label>
+    <label><input type="radio" name="q3" value="c"> Task hérite toujours de l'acteur du protocole qu'elle consomme en interne</label>
+    <label><input type="radio" name="q3" value="d"> AsyncStream.Continuation est explicitement conçu pour être appelé depuis n'importe quel contexte</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. Quel principe général cette leçon applique-t-elle en retirant <code>service</code> de <code>SongDownloadViewModel</code> ?</p>
+    <label><input type="radio" name="q4" value="a"> La règle de dépendance : rien d'externe ne remonte au-delà du UseCase</label>
+    <label><input type="radio" name="q4" value="b"> Le principe de responsabilité unique appliqué uniquement aux structures de données</label>
+    <label><input type="radio" name="q4" value="c"> L'inversion de contrôle appliquée exclusivement aux tests unitaires du ViewModel</label>
+    <label><input type="radio" name="q4" value="d"> La règle qui interdit tout usage du mot-clé protocol dans le Domain</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Un doute sur un autre endroit du projet où une couche "saute" une frontière qu'elle ne devrait pas ? Décris l'endroit à ton agent — c'est exactement le genre de repérage qui vaut la peine d'être fait avant d'empiler encore des leçons dessus.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0007-domain-usecase-et-repository.html">← Leçon 7 : Domain/UseCase — DownloadSongUseCase</a></span>
+    <span><a href="0009-bibliotheque-chansons-telechargees.html">Leçon suivante : l'onglet Bibliothèque affiche les chansons téléchargées →</a></span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
