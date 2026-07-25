@@ -6,11 +6,12 @@
 //
 
 import SwiftUI
+import FactoryKit
 
 struct SongOptionsSheet: View {
-    @Environment(\.player) private var player
+    @Injected(\.player) private var player
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.downloadedSongsRepository) private var downloadedSongsRepository
+    @Injected(\.downloadSong) private var downloadSong
     
     let song: Song
     
@@ -84,10 +85,7 @@ struct SongOptionsSheet: View {
         }
         .task {
             if downloadViewModel == nil {
-                downloadViewModel = SongDownloadViewModel(
-                    song: song,
-                    downloadSong: DownloadSongUseCase(repository: downloadedSongsRepository)
-                )
+                downloadViewModel = SongDownloadViewModel(song: song, downloadSong: downloadSong)
             }
         }
     }

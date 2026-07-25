@@ -6,9 +6,10 @@
 //
 
 import SwiftUI
+import FactoryKit
 
 struct LibraryView: View {
-    @Environment(\.downloadedSongsRepository) private var downloadedSongsRepository
+    @Injected(\.fetchDownloadedSongs) private var fetchDownloadedSongs
     @State private var viewModel: LibraryViewModel?
     @State private var selectedSong: Song?
     
@@ -37,7 +38,7 @@ struct LibraryView: View {
         }
         .task {
             if viewModel == nil {
-                viewModel = LibraryViewModel(fetchDownloadedSongs: FetchDownloadedSongsUseCase(repository: downloadedSongsRepository))
+                viewModel = LibraryViewModel(fetchDownloadedSongs: fetchDownloadedSongs)
             }
             await viewModel?.refresh()
         }

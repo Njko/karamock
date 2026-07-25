@@ -6,9 +6,10 @@
 //
 
 import SwiftUI
+import FactoryKit
 
 struct RootTabView: View {
-    @Environment(\.player) private var player
+    @Injected(\.player) private var player
     
     var body: some View {
         @Bindable var player = player
