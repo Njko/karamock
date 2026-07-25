@@ -8,7 +8,44 @@
 import SwiftUI
 
 struct LibraryView: View {
+    @Environment(\.downloadedSongsRepository) private var downloadedSongsRepository
+    @State private var viewModel: LibraryViewModel?
+    @State private var selectedSong: Song?
+    
     var body: some View {
-        Text("Bibliothèque à venir")
+        NavigationStack {
+            Group {
+                if let viewModel, !viewModel.songs.isEmpty {
+                    List(viewModel.songs) { song in
+                        Button {
+                            selectedSong = song
+                        } label: {
+                            SongRow(song: song)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .listStyle(.plain)
+                } else {
+                    ContentUnavailableView(
+                        "Aucune chanson téléchargée",
+                        systemImage: "arrow.down.circle",
+                        description: Text("Télécharge une chanson depuis sa fiche pour la retrouver ici.")
+                    )
+                }
+            }
+            .navigationTitle("Bibliothèque")
+        }
+        .task {
+            if viewModel == nil {
+                viewModel = LibraryViewModel(fetchDownloadedSongs: FetchDownloadedSongsUseCase(repository: downloadedSongsRepository))
+            }
+            await viewModel?.refresh()
+        }
+        .refreshable {
+            await viewModel?.refresh()
+        }
+        .sheet(item: $selectedSong) { song in
+            SongOptionsSheet(song: song)
+        }
     }
 }
