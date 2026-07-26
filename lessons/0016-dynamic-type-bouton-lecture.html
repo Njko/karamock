@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 16 — Dynamic Type : le bouton qui ne grossit pas</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 16 · Accessibilité (3/N)</p>
+  <h1>Dynamic Type : un bouton qui ne grossit pas avec le texte</h1>
+  <p class="subtitle">Après les étiquettes VoiceOver (Leçon 14) et le bouton imbriqué (Leçon 15), un axe différent : le <em>Dynamic Type</em>, le réglage système qui agrandit tout le texte de l'app pour les utilisateurs qui en ont besoin. Sur l'écran <code>FullScreenPlayerView</code>, deux boutons voisins réagissent différemment à ce réglage — et ce n'est pas un hasard.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> le Dynamic Type n'est pas qu'un sujet de basse vision. Dans une app de karaoké, il est probable qu'un utilisateur pose son téléphone à distance en chantant, ou augmente la taille du texte pour lire les paroles sans ses lunettes — un cas d'usage central pour Karamock, pas un cas limite. Un bouton play/pause qui reste minuscule pendant que tout le reste de l'écran grossit devient un vrai problème d'usage, pas juste un détail de conformité.
+  </div>
+
+  <h2>Ce qui grossit déjà, sans rien faire</h2>
+  <p>Dans <code>FullScreenPlayerView</code>, le titre (<code>.title2.bold()</code>), l'artiste, et les boutons piste précédente/suivante (<code>.font(.title)</code>) réagissent tous correctement au réglage de taille de texte : ce sont des styles de texte <strong>sémantiques</strong>. Une SF Symbol affichée via <code>Image(systemName:)</code> suit automatiquement la taille de la police qu'on lui applique — tant que cette police est un style sémantique comme <code>.title</code>, elle grossit avec le reste de l'app, sans configuration supplémentaire.</p>
+
+  <h2>Ce qui ne grossit pas : <code>.font(.system(size: 64))</code></h2>
+  <pre><code>Button {
+    player.isPlaying.toggle()
+} label: {
+    Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+        .font(.system(size: 64))
+}</code></pre>
+  <p><code>.system(size: 64)</code> est une taille fixe, en points — pas un style sémantique. Ce bouton ne bouge pas d'un pixel quel que soit le réglage de Dynamic Type, alors que les boutons précédent/suivant juste à côté, eux, grossissent normalement. Résultat concret à un réglage de texte élevé : le plus gros bouton de l'écran visuellement au réglage par défaut devient le plus petit, proportionnellement, à côté d'un texte et de boutons voisins bien plus grands.</p>
+
+  <h2>La correction : <code>@ScaledMetric</code></h2>
+  <pre><code>struct FullScreenPlayerView: View {
+    @Environment(\.player) private var player
+    @Environment(\.dismiss) private var dismiss
+
+    let song: Song
+
+    @State private var progress: TimeInterval = 0
+    @ScaledMetric(relativeTo: .largeTitle) private var playButtonSize: CGFloat = 64
+    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        // …
+        Button {
+            player.isPlaying.toggle()
+        } label: {
+            Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                .font(.system(size: playButtonSize))
+        }
+        .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
+        // …
+    }
+}</code></pre>
+  <p><code>@ScaledMetric</code> garde <code>64</code> comme valeur de référence à la taille de texte par défaut, mais recalcule cette valeur proportionnellement dès que l'utilisateur change son réglage — exactement le même comportement que les styles sémantiques, mais applicable à une taille numérique quelconque (ici un point de police, mais ça marche aussi pour un espacement ou une largeur de cadre). <code>relativeTo: .largeTitle</code> aligne l'échelle du bouton sur le plus gros texte visible de l'écran, cohérent avec son rôle de contrôle principal.</p>
+
+  <details class="aside">
+    <summary>Vérifier : changer la taille de texte sans quitter le Simulateur</summary>
+    <p>Dans Xcode, la barre de debug du Simulateur en cours d'exécution propose un raccourci <em>Environment Overrides</em> (icône de curseurs) avec un réglage "Text Size" — changer sa valeur applique le Dynamic Type immédiatement, sans relancer l'app ni changer les Réglages système. Alternative complète : <em>Réglages → Accessibilité → Affichage et taille du texte → Texte plus grand</em>, jusqu'aux tailles d'accessibilité (au-delà de la simple taille de texte).</p>
+  </details>
+
+  <details class="aside">
+    <summary>Le cadre fixe des paroles (160pt) n'est pas le même problème</summary>
+    <p><code>LyricsView</code>, affichée dans un <code>.frame(height: 160)</code>, pourrait sembler souffrir du même défaut. Mais <code>LyricsView</code> encapsule déjà un <code>ScrollView</code> : à une taille de texte plus grande, les paroles ne sont ni coupées ni perdues, il faut simplement défiler un peu plus pour voir la ligne courante — un compromis d'espace acceptable, pas une perte d'information. C'est la différence entre un cadre fixe qui <strong>contient</strong> du contenu défilant (correct) et une taille de police fixe qui <strong>ignore</strong> le réglage utilisateur (le bug de cette leçon).</p>
+  </details>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>Boutons précédent/suivant grossissent, bouton central non</td><td>Les trois boutons grossissent ensemble, proportionnellement</td></tr>
+    <tr><td>Taille fixe en points, indifférente au réglage utilisateur</td><td><code>@ScaledMetric</code> recalcule la taille à chaque changement</td></tr>
+    <tr><td>Incohérence visuelle croissante à mesure que le texte grossit</td><td>Le bouton reste le contrôle visuellement dominant de l'écran</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://nilcoalescing.com/blog/AdaptingImagesAndSymbolsToDynamicTypeSizesInSwiftUI/">Adapting images and symbols to Dynamic Type sizes in SwiftUI</a> (nilcoalescing.com) — explique précisément pourquoi les SF Symbols suivent Dynamic Type avec un style sémantique, mais pas avec une taille fixe, et montre <code>@ScaledMetric</code> pour corriger ce cas exact.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi les boutons précédent/suivant grossissent-ils avec le texte, contrairement au bouton play/pause central ?</p>
+    <label><input type="radio" name="q1" value="a"> Ils utilisent une image bitmap au lieu d'une SF Symbol</label>
+    <label><input type="radio" name="q1" value="b"> Ils sont dans un HStack, qui force le Dynamic Type sur ses enfants</label>
+    <label><input type="radio" name="q1" value="c"> Ils utilisent un style de police sémantique (.title) au lieu d'une taille fixe</label>
+    <label><input type="radio" name="q1" value="d"> Ils ont été marqués manuellement comme prioritaires pour l'accessibilité</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Que fait exactement <code>@ScaledMetric(relativeTo: .largeTitle) private var playButtonSize: CGFloat = 64</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> Il force le bouton à toujours occuper la même taille que le titre</label>
+    <label><input type="radio" name="q2" value="b"> Il désactive Dynamic Type uniquement pour cette valeur précise</label>
+    <label><input type="radio" name="q2" value="c"> Il convertit 64 en pourcentage de la largeur de l'écran</label>
+    <label><input type="radio" name="q2" value="d"> Il garde 64 comme référence, puis la recalcule selon le réglage de texte</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">3. Pourquoi le cadre fixe de 160pt de <code>LyricsView</code> n'est-il pas le même bug que le bouton play/pause ?</p>
+    <label><input type="radio" name="q3" value="a"> LyricsView n'affiche aucun texte, seulement des images de paroles</label>
+    <label><input type="radio" name="q3" value="b"> Le contenu défile dans un ScrollView, rien n'est coupé ni perdu</label>
+    <label><input type="radio" name="q3" value="c"> 160pt est déjà une valeur calculée par @ScaledMetric ailleurs dans le code</label>
+    <label><input type="radio" name="q3" value="d"> Les paroles ignorent volontairement le réglage de Dynamic Type</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. Pourquoi le Dynamic Type est-il présenté comme central pour Karamock, pas comme un cas limite ?</p>
+    <label><input type="radio" name="q4" value="a"> Regarder l'écran à distance en chantant, ou lire les paroles sans lunettes, sont des usages plausibles et courants</label>
+    <label><input type="radio" name="q4" value="b"> Apple exige un score Dynamic Type minimal pour toute app musicale sur l'App Store</label>
+    <label><input type="radio" name="q4" value="c"> Sans Dynamic Type, l'app ne peut techniquement pas passer les tests Swift Testing de la Leçon 13</label>
+    <label><input type="radio" name="q4" value="d"> Les autres axes d'accessibilité de la mission ont déjà tous été traités</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu veux vérifier si d'autres tailles fixes du projet (les cadres 150×150 de <code>PlaylistCard</code>, 50×50 de <code>SongRow</code>) posent un problème similaire, ou si ce sont des cas différents ? Demande à ton agent de les auditer un par un.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0015-voiceover-onTapGesture-mini-player.html">← Leçon 15 : le bouton imbriqué du mini-lecteur</a></span>
+    <span>Leçon suivante : Dynamic Type, suite</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
