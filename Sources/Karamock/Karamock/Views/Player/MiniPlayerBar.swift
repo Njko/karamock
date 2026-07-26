@@ -19,10 +19,16 @@ struct MiniPlayerBar: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(.quaternary)
                 .frame(width: 40, height: 40)
+                .accessibilityHidden(true)
             
             VStack(alignment: .leading, spacing: 2) {
                 Text(song.title).font(.subheadline.bold())
                 Text(song.artist).font(.caption).foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                player.isExpanded = true
             }
             
             Spacer()
