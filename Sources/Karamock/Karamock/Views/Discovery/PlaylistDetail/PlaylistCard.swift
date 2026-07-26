@@ -19,7 +19,12 @@ struct PlaylistCard: View {
                     .font(.headline)
                     .foregroundStyle(.white)
                     .padding(10)
+                    .lineLimit(2)
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
             }
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            .accessibilityShowsLargeContentViewer {
+                Text(playlist.title)
+            }
     }
 }
