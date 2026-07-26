@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 15 — VoiceOver et le bouton imbriqué du mini-lecteur</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 15 · Accessibilité (2/N)</p>
+  <h1>VoiceOver et le bouton imbriqué du mini-lecteur</h1>
+  <p class="subtitle">La Leçon 14 avait repéré le piège sans le corriger : <code>MiniPlayerBar</code> tout entier réagit à <code>.onTapGesture</code> pour ouvrir le lecteur plein écran, mais VoiceOver n'a aujourd'hui aucun moyen d'activer ce geste. Cette leçon le corrige — et la vraie difficulté n'est pas où tu l'attends.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> ce genre de bug ne se voit pas en relisant le code ni en testant au doigt — l'app fonctionne visuellement à la perfection. Il ne se révèle qu'en activant VoiceOver et en essayant réellement de naviguer. C'est un bon exemple concret à montrer à toute une équipe (pas seulement aux devs) pour justifier qu'un passage régulier avec VoiceOver activé fasse partie de la recette de test, au même titre qu'un test sur un petit écran ou en mode sombre.
+  </div>
+
+  <h2>L'objectif, avant le code</h2>
+  <p>Un utilisateur voyant dispose aujourd'hui de <strong>deux gestes indépendants</strong> sur <code>MiniPlayerBar</code> : taper n'importe où sur la barre (sauf sur l'icône) ouvre le plein écran ; taper précisément sur l'icône bascule lecture/pause, sans ouvrir le plein écran. Le but de cette leçon n'est pas "rendre du texte interactif" comme règle générale — c'est de donner à un utilisateur VoiceOver l'accès à ces <strong>deux mêmes actions, indépendamment l'une de l'autre</strong>. Si l'action "ouvrir le plein écran" n'existe nulle part dans l'arbre d'accessibilité, elle est tout simplement inaccessible à VoiceOver, alors qu'un utilisateur voyant l'a sous le doigt en permanence.</p>
+  <p>Pourquoi le titre et l'artiste deviennent-ils le support de cette action, précisément ? Parce qu'une fois qu'on retire de cette zone la pochette (décorative, masquée à l'accessibilité) et le <code>Spacer</code> (vide, rien à annoncer), il ne reste que le titre et l'artiste comme contenu visible dans toute la zone "taper pour ouvrir". Ce n'est donc pas le texte en tant que texte qui devient un bouton : c'est <strong>la rangée entière, moins le bouton play/pause</strong>, qui devient un seul élément VoiceOver — et son contenu annoncé se trouve composé du titre et de l'artiste simplement parce que c'est tout ce qu'il y a d'autre à lire dans cette zone.</p>
+
+  <h2>Pourquoi <code>.onTapGesture</code> ne suffit pas</h2>
+  <p>VoiceOver n'utilise pas les gestes tactiles standards : activer un élément se fait par un double-tap générique, qui déclenche l'<em>action d'accessibilité</em> de l'élément — pas ses gestionnaires de gestes SwiftUI. Un <code>.onTapGesture</code> posé sur une vue ne crée ni le trait <code>.isButton</code> (VoiceOver ne sait donc pas que l'élément est activable) ni l'action d'accessibilité correspondante (même en ajoutant le trait, VoiceOver n'aurait toujours rien à déclencher). Il faut les deux, explicitement.</p>
+
+  <h2>Le vrai piège ici : un bouton imbriqué</h2>
+  <p><code>MiniPlayerBar</code> n'est pas qu'une simple rangée tapable : elle contient aussi son propre bouton play/pause, qui doit rester activable indépendamment. La solution la plus évidente — regrouper toute la barre avec <code>.accessibilityElement(children: .combine)</code> — casserait justement ça : combiner signifie que <strong>tous</strong> les enfants, y compris le <code>Button</code> play/pause, fusionnent en un seul élément VoiceOver. Résultat : la mini-barre deviendrait activable pour ouvrir le plein écran, mais impossible de mettre en pause sans y aller d'abord — une régression, pas une correction.</p>
+  <p>Il faut donc grouper <strong>seulement</strong> la partie qui doit ouvrir le plein écran — la pochette et le texte — et laisser le bouton play/pause complètement en dehors de ce groupe.</p>
+
+  <details class="aside">
+    <summary>Alternative envisagée, écartée : tout combiner et cacher play/pause dans le rotor</summary>
+    <p>Il existe une autre façon de garder le bouton play/pause "accessible" tout en combinant toute la barre : lui donner une <em>action nommée</em> (<code>.accessibilityAction(named:)</code>) plutôt qu'un arrêt VoiceOver séparé. L'utilisateur atteindrait alors un seul élément "Year of the Cat, Cat Stevens, bouton", et découvrirait l'action "Lire" via le rotor VoiceOver (le geste à deux doigts qui fait défiler les actions disponibles), plutôt qu'en balayant simplement vers l'élément suivant.</p>
+    <p>Cette option a été écartée : les retours d'expérience de terrain montrent qu'une bonne partie des utilisateurs VoiceOver n'utilise pas le rotor au quotidien, et que des éléments séparés, atteignables par un balayage classique, restent préférables à une action cachée dans le rotor — surtout pour un contrôle aussi fréquent que play/pause. Garder le bouton comme arrêt indépendant, plutôt que comme action secondaire du rotor, colle mieux à la façon dont la majorité des utilisateurs VoiceOver naviguent réellement.</p>
+  </details>
+
+  <h2>La correction</h2>
+  <pre><code>struct MiniPlayerBar: View {
+    @Environment(\.player) var player
+    let song: Song
+
+    var body: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.quaternary)
+                .frame(width: 40, height: 40)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(song.title).font(.subheadline.bold())
+                Text(song.artist).font(.caption).foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                player.isExpanded = true
+            }
+
+            Spacer()
+
+            Button {
+                player.isPlaying.toggle()
+            } label: {
+                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
+        }
+        .padding(10)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 8)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            player.isExpanded = true
+        }
+    }
+}</code></pre>
+  <p>Le <code>.onTapGesture</code> existant reste inchangé — il continue de gérer le tap au doigt pour tout utilisateur voyant. Ce qu'on ajoute est purement une deuxième voie d'activation, réservée à VoiceOver, et ce sont bien <strong>trois modificateurs indépendants</strong>, qui ne se déclenchent pas les uns les autres :</p>
+  <ul>
+    <li><code>.accessibilityElement(children: .combine)</code> ne fait que fusionner l'<em>annonce</em> : sans lui, VoiceOver ferait deux arrêts séparés ("Year of the Cat", puis "Cat Stevens") ; avec lui, un seul arrêt qui lit les deux à la suite. Ça ne dit encore rien sur le fait que l'élément soit activable ou non — ça ne fait que dire "lis ceci comme un seul morceau".</li>
+    <li><code>.accessibilityAddTraits(.isButton)</code> est ce qui annonce "bouton" à la fin et fait comprendre à VoiceOver qu'un double-tap doit déclencher quelque chose. Rien à voir avec le fait d'avoir combiné ou non les textes juste avant — on pourrait ajouter ce trait à un seul <code>Text</code>, sans <code>.combine</code>, exactement pareil.</li>
+    <li><code>.accessibilityAction { player.isExpanded = true }</code> est ce qui définit concrètement ce que ce double-tap déclenche. Sans cette ligne, le trait <code>.isButton</code> dirait "c'est un bouton" mais VoiceOver n'aurait rien à exécuter au double-tap.</li>
+  </ul>
+  <p>Les trois s'additionnent, mais aucun n'est une conséquence des deux autres : combiner deux <code>Text</code> ne les rend pas boutons ; ajouter le trait <code>.isButton</code> à un texte quelconque n'y ajoute pas d'action tant qu'on ne l'écrit pas explicitement. Le bouton play/pause, lui, n'est touché par aucun de ces trois modificateurs — il reste un arrêt VoiceOver séparé, exactement comme avant.</p>
+
+  <details class="aside">
+    <summary>Pourquoi <code>.accessibilityHidden(true)</code> sur le rectangle de pochette</summary>
+    <p>Le <code>RoundedRectangle</code> est un simple espace réservé visuel (pas de vraie pochette d'album chargée dans cette mission) — sans contenu informatif pour un utilisateur non-voyant. Le masquer évite à VoiceOver d'annoncer un élément vide ou générique ("image") entre deux éléments qui, eux, comptent vraiment. C'est aussi ce qui garantit que <code>.accessibilityElement(children: .combine)</code> sur le <code>VStack</code> voisin ne produit que "Year of the Cat, Cat Stevens" — sans avoir à écrire l'étiquette à la main.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Vérifier : deux arrêts VoiceOver distincts, pas un seul</summary>
+    <p>Avec l'Accessibility Inspector ou VoiceOver activé sur le Simulateur, faire glisser le doigt sur <code>MiniPlayerBar</code> doit maintenant produire exactement deux arrêts : "Year of the Cat, Cat Stevens, bouton" (double-tap → plein écran) puis "Lire, bouton" ou "Mettre en pause, bouton" (double-tap → play/pause). Si un seul arrêt apparaît pour toute la barre, c'est le signe qu'un <code>.accessibilityElement(children: .combine)</code> a été posé trop haut et a englouti le bouton.</p>
+  </details>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>VoiceOver ne peut pas activer l'ouverture du plein écran</td><td>Un double-tap sur "titre, artiste" ouvre le plein écran</td></tr>
+    <tr><td>Aucun trait ni action d'accessibilité sur la zone tapable</td><td>Trait <code>.isButton</code> + action explicite, scopés au bon endroit</td></tr>
+    <tr><td>Regrouper toute la barre casserait le bouton play/pause</td><td>Le bouton play/pause reste un arrêt VoiceOver indépendant</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://www.createwithswift.com/preparing-your-app-for-voice-over-accessibility-traits/">Preparing your App for VoiceOver: Accessibility Traits</a> (createwithswift.com) — montre exactement la combinaison <code>.accessibilityAddTraits(.isButton)</code> + <code>.accessibilityAction</code> nécessaire pour qu'un <code>.onTapGesture</code> devienne activable par VoiceOver. Pour l'arbitrage éléments séparés vs. rotor, <a href="https://www.basbroek.nl/improving-voiceover">Improving Accessibility: VoiceOver</a> (basbroek.nl).
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">1. Pourquoi <code>.onTapGesture</code> seul ne suffit-il pas pour VoiceOver ?</p>
+    <label><input type="radio" name="q1" value="a"> onTapGesture ne fonctionne que sur les vues marquées Identifiable</label>
+    <label><input type="radio" name="q1" value="b"> VoiceOver désactive tous les gestes tactiles par défaut sur iOS</label>
+    <label><input type="radio" name="q1" value="c"> SwiftUI retire automatiquement onTapGesture quand l'app est en français</label>
+    <label><input type="radio" name="q1" value="d"> Le double-tap VoiceOver déclenche l'action d'accessibilité, pas le geste</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Pourquoi ne pas simplement mettre <code>.accessibilityElement(children: .combine)</code> sur tout le <code>HStack</code> de <code>MiniPlayerBar</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> Ce modificateur n'existe que pour les vues contenant un seul Text</label>
+    <label><input type="radio" name="q2" value="b"> Ça fusionnerait aussi le bouton play/pause, le rendant inatteignable seul</label>
+    <label><input type="radio" name="q2" value="c"> Combine désactive .onTapGesture sur l'ensemble du conteneur</label>
+    <label><input type="radio" name="q2" value="d"> Xcode refuse de compiler ce modificateur sur un HStack contenant un Button</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi <code>.accessibilityHidden(true)</code> sur le <code>RoundedRectangle</code> de pochette ?</p>
+    <label><input type="radio" name="q3" value="a"> C'est un espace réservé purement visuel, sans information à annoncer</label>
+    <label><input type="radio" name="q3" value="b"> Les formes géométriques ne sont jamais accessibles par défaut dans SwiftUI</label>
+    <label><input type="radio" name="q3" value="c"> Il faut cacher tout élément qui n'a pas d'action d'accessibilité définie</label>
+    <label><input type="radio" name="q3" value="d"> accessibilityHidden est requis dès qu'un HStack contient un Button</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">4. Combien d'arrêts VoiceOver distincts <code>MiniPlayerBar</code> doit-elle produire après la correction ?</p>
+    <label><input type="radio" name="q4" value="a"> Un seul, qui combine titre, artiste et bouton play/pause ensemble</label>
+    <label><input type="radio" name="q4" value="b"> Trois : le titre, l'artiste et le bouton play/pause séparément</label>
+    <label><input type="radio" name="q4" value="c"> Deux : titre+artiste groupés d'un côté, play/pause de l'autre</label>
+    <label><input type="radio" name="q4" value="d"> Quatre, en comptant le rectangle de pochette masqué</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu veux appliquer le même raisonnement à <code>FullScreenPlayerView</code>, qui a aussi une zone de progression (<code>Slider</code>) sans <code>accessibilityValue</code> explicite ? Demande à ton agent où et comment l'ajouter.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0014-voiceover-labels-lecteur.html">← Leçon 14 : VoiceOver sur le lecteur</a></span>
+    <span>Leçon suivante : Dynamic Type</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
