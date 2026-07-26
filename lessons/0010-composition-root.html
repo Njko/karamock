@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 10 — Composition Root</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 10 · Architecture en couches (5/N)</p>
+  <h1>Composition Root : un seul endroit pour construire les dépendances</h1>
+  <p class="subtitle">Les Leçons 7 à 9 ont bâti la couche Domain (<code>DownloadSongUseCase</code>, <code>FetchDownloadedSongsUseCase</code>, <code>DownloadedSongsRepository</code>). Mais une question reste sans réponse claire : qui a le droit de construire l'implémentation concrète, <code>InMemoryDownloadedSongsRepository()</code> — et où ?</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> aujourd'hui, c'est <code>RootTabView</code> — une View — qui écrit <code>@State private var downloadedSongsRepository = InMemoryDownloadedSongsRepository()</code>. Une vue de la couche UI connaît donc le nom d'un type concret de la couche Data. C'est exactement le genre de fuite que la Dependency Rule interdit (mêmes principes qu'en Leçon 8, appliqués cette fois à la construction plutôt qu'à l'utilisation). Cette leçon identifie le <strong>composition root</strong> du projet : l'unique endroit autorisé à écrire le nom d'un type concret.
+  </div>
+
+  <h2>Deux mécanismes déjà en place, une question encore ouverte</h2>
+  <p>Le projet utilise déjà deux formes d'injection de dépendances, et les deux sont correctes :</p>
+  <ul>
+    <li><strong>Injection par constructeur</strong> — <code>DownloadSongUseCase(repository:)</code>, <code>SongDownloadViewModel(song:downloadSong:)</code> : chaque type reçoit ses dépendances explicitement, sans valeur par défaut cachée pour ce qui doit être partagé.</li>
+    <li><strong>Injection par environnement</strong> — <code>@Entry</code> + <code>@Environment(\.downloadedSongsRepository)</code> : les vues profondément imbriquées (<code>SongOptionsSheet</code>, <code>LibraryView</code>) récupèrent l'instance partagée sans qu'on la fasse transiter manuellement à travers chaque initialiseur de vue intermédiaire.</li>
+  </ul>
+  <p>Aucun des deux ne répond à une question pourtant essentielle : <strong>où, la toute première fois, l'instance concrète est-elle créée ?</strong> Actuellement, la réponse est <code>RootTabView</code> :</p>
+
+  <pre><code>struct RootTabView: View {
+    @State var player = PlayerState()
+    @State var downloadedSongsRepository = InMemoryDownloadedSongsRepository()  // ⚠️ type concret, dans une View
+
+    var body: some View {
+        TabView { … }
+            .environment(\.player, player)
+            .environment(\.downloadedSongsRepository, downloadedSongsRepository)
+            …
+    }
+}</code></pre>
+
+  <p><code>RootTabView</code> joue ici deux rôles à la fois : assembler les écrans de l'app <em>et</em> décider quelle implémentation du Repository utiliser. Le second rôle ne devrait pas appartenir à une View.</p>
+
+  <h2>Le composition root : la seule porte d'entrée vers les types concrets</h2>
+  <p>Un composition root est <em>« l'endroit précis de l'application où les modules sont composés, c'est-à-dire instanciés et injectés avec toutes leurs dépendances »</em> — un point unique, pas une notion diffuse répartie dans plusieurs fichiers. Dans une app SwiftUI, ce point unique existe déjà et n'a pas besoin d'être inventé : c'est le <code>@main App</code>, qui s'exécute une fois, avant qu'aucune vue n'existe.</p>
+
+  <pre><code>@main
+struct KaramockApp: App {
+    @State private var player = PlayerState()
+    @State private var downloadedSongsRepository: DownloadedSongsRepository = InMemoryDownloadedSongsRepository()
+
+    var body: some Scene {
+        WindowGroup {
+            RootTabView()
+                .environment(\.player, player)
+                .environment(\.downloadedSongsRepository, downloadedSongsRepository)
+        }
+    }
+}</code></pre>
+
+  <p><code>RootTabView</code> redevient une simple vue d'assemblage, sans plus aucune connaissance d'un type concret de la couche Data :</p>
+
+  <pre><code>struct RootTabView: View {
+    @Environment(\.player) private var player
+
+    var body: some View {
+        @Bindable var player = player  // doit être la première ligne de body
+
+        TabView {
+            DiscoveryView()
+                .tabItem {
+                    Label("Découvrir", systemImage: "book.closed.fill")
+                }
+            LibraryView()
+                .tabItem {
+                    Label("Bibliothèque", systemImage: "music.note.list")
+                }
+        }
+        .overlay(alignment: .bottom) {
+            if let song = player.currentSong, !player.isExpanded {
+                MiniPlayerBar(song: song)
+                    .padding(.bottom, 49)
+            }
+        }
+        .fullScreenCover(isPresented: $player.isExpanded) {
+            if let song = player.currentSong {
+                FullScreenPlayerView(song: song)
+            }
+        }
+    }
+}</code></pre>
+
+  <details class="aside">
+    <summary>Pourquoi une ligne <code>@Bindable var player = player</code> au sommet de body</summary>
+    <p><code>$player.isExpanded</code> fonctionnait avant parce que <code>player</code> était un <code>@State</code> — seuls <code>@State</code> et <code>@Bindable</code> exposent une projection <code>$</code>. <code>@Environment</code> n'en a jamais eu : il donne seulement une valeur en lecture. La solution documentée pour obtenir malgré tout un <code>Binding&lt;Bool&gt;</code> vers <code>player.isExpanded</code> à partir d'une instance <code>@Observable</code> lue dans l'environnement est de la "ré-envelopper" localement avec <code>@Bindable var player = player</code> au tout début de <code>body</code> — cette ligne masque volontairement la propriété <code>player</code> d'origine par une version qui expose <code>$player</code>. Point d'attention réel : cette déclaration doit rester la toute première ligne de <code>body</code>, pas nichée dans un <code>VStack</code> ou un autre builder — la placer plus profondément provoque une erreur de link (<code>Undefined symbol: unsafeMutableAddressor</code>).</p>
+  </details>
+
+  <p>Le type de la propriété a aussi changé : <code>downloadedSongsRepository: DownloadedSongsRepository</code> (le protocole), pas <code>InMemoryDownloadedSongsRepository</code> (le type concret). Le composition root est le seul endroit où le nom concret apparaît une fois, à la construction — partout ailleurs, seul le protocole circule.</p>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>RootTabView</code> construit <code>InMemoryDownloadedSongsRepository()</code></td><td><code>KaramockApp</code> construit <code>InMemoryDownloadedSongsRepository()</code></td></tr>
+    <tr><td><code>RootTabView</code> est à la fois vue racine et point de construction</td><td><code>RootTabView</code> est une vue pure ; <code>KaramockApp</code> est le composition root</td></tr>
+    <tr><td>Le type concret apparaît dans une View</td><td>Le type concret n'apparaît que dans <code>@main App</code></td></tr>
+  </table>
+
+  <details class="aside">
+    <summary>Pourquoi <code>SongOptionsSheet</code> et <code>LibraryView</code> continuent-ils de construire leurs UseCases eux-mêmes ?</summary>
+    <p>On pourrait pousser le raisonnement jusqu'au bout et pré-construire aussi <code>DownloadSongUseCase</code> et <code>FetchDownloadedSongsUseCase</code> dans le composition root, dans un conteneur genre <code>AppDependencies</code>. Ce n'est pas fait ici, volontairement : ces UseCases sont des <code>struct</code> sans état, sans coût de construction, qui ne font qu'assembler une dépendance déjà partagée (le Repository récupéré via l'environnement). Les reconstruire au point d'usage ne duplique aucune donnée ni aucune logique — seule la <em>ligne de câblage</em> (<code>DownloadSongUseCase(repository:)</code>) est répétée deux fois, ce qui reste lisible avec seulement deux UseCases. Ajouter un conteneur <code>AppDependencies</code> maintenant serait de l'abstraction prématurée. Si le graphe de dépendances grossit significativement (plus de UseCases, des dépendances qui ne viennent pas toutes de l'environnement), ce calcul coût/bénéfice changera — mais ce n'est pas encore le cas.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Le piège de la valeur par défaut de <code>@Entry</code></summary>
+    <p><code>@Entry var downloadedSongsRepository: DownloadedSongsRepository = InMemoryDownloadedSongsRepository()</code> a toujours une valeur par défaut — c'est ce qui protège les Previews de <code>LibraryView</code> du crash (Leçon 9). Le revers : si le composition root <strong>oubliait</strong> d'appeler <code>.environment(\.downloadedSongsRepository, downloadedSongsRepository)</code>, l'app ne planterait pas non plus — elle utiliserait silencieusement une instance vide et déconnectée, jamais alimentée par les téléchargements réels. Contrairement à la forme par type (<code>@Environment(Type.self)</code>, abandonnée en Leçon 4 précisément parce qu'elle plante sans ancêtre explicite), <code>@Entry</code> ne peut pas te protéger de cet oubli par un crash. La seule garde-fou ici, c'est la discipline : puisqu'il n'existe maintenant qu'un seul composition root, il n'y a qu'un seul endroit à vérifier — <code>KaramockApp</code> doit toujours injecter explicitement, jamais compter sur le défaut de <code>@Entry</code> en dehors des Previews et des tests.</p>
+  </details>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://azizbek1402.medium.com/mastering-dependency-injection-in-ios-implementing-a-composition-root-with-di-containers-in-swift-0f51b91531ab">Mastering Dependency Injection in iOS: Implementing a Composition Root</a> (Azizbek Asadov) pour la définition et les bénéfices du composition root ; <a href="https://lucasvandongen.dev/dependency_injection_swift_swiftui.php">Managing Dependencies in the Age of SwiftUI</a> (Lucas van Dongen) pour la confirmation que <code>@main App</code> est un point d'entrée valide pour ce rôle en SwiftUI.
+  </div>
+
+  <div class="mission-tie">
+    <p><strong>Pourquoi apprendre le composition root "à la main" avant une librairie de DI :</strong> ce qu'on vient de construire — <code>KaramockApp</code> qui assemble deux dépendances partagées et les injecte via <code>@Environment</code> — n'est pas un brouillon jetable. C'est une stratégie de DI à part entière, suffisante tant que le graphe de dépendances reste petit (ici : 2 instances partagées, 2 UseCases construits au point d'usage). Aucune app SwiftUI n'a besoin d'un SDK pour ça.</p>
+    <p>Le calcul change à plus grande échelle : des dizaines d'écrans, de UseCases, de Repository à câbler à la main deviennent vite un fardeau répétitif, et c'est là que les équipes Swift adoptent des bibliothèques dédiées. Pour un projet SwiftUI neuf comme celui-ci, la référence actuelle est <a href="https://github.com/hmlongco/Factory">Factory</a> — un <code>Container</code> dans lequel chaque dépendance est une propriété calculée (<code>var myService: Factory&lt;MyServiceType&gt;</code>), résolue via le property wrapper <code>@Injected</code>. Contrairement à des solutions plus anciennes basées sur la réflexion et la résolution au runtime, Factory est <strong>vérifié à la compilation</strong> : une dépendance sans fabrique enregistrée empêche le code de compiler, exactement dans l'esprit de rigueur que Swift 6 nous a fait adopter depuis la Leçon 7 (<code>Sendable</code>, isolation d'acteur).</p>
+    <p>La Leçon 11 reprend exactement le graphe construit ici (<code>player</code>, <code>downloadedSongsRepository</code>, les deux UseCases) et le fait migrer vers un <code>Container</code> Factory — tu pourras comparer les deux stratégies sur le même exemple plutôt que sur un projet jouet différent.</p>
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">1. Quel était le problème avec <code>RootTabView</code> avant cette leçon ?</p>
+    <label><input type="radio" name="q1" value="a"> Il créait deux instances distinctes du Repository au lieu d'une seule partagée</label>
+    <label><input type="radio" name="q1" value="b"> Il n'injectait pas correctement player dans l'environnement de ses enfants</label>
+    <label><input type="radio" name="q1" value="c"> Il manquait l'annotation @MainActor requise pour manipuler un @State</label>
+    <label><input type="radio" name="q1" value="d"> Une View de la couche UI connaissait le nom d'un type concret de la couche Data</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Pourquoi <code>KaramockApp</code> (<code>@main App</code>) convient-il comme composition root ?</p>
+    <label><input type="radio" name="q2" value="a"> C'est le seul type Swift autorisé à importer le module Foundation</label>
+    <label><input type="radio" name="q2" value="b"> Il s'exécute une seule fois, avant toute vue, exactement là où composer le graphe</label>
+    <label><input type="radio" name="q2" value="c"> Il bénéficie d'un accès direct au disque contrairement aux autres types</label>
+    <label><input type="radio" name="q2" value="d"> SwiftUI régénère son instance à chaque changement d'onglet de l'app</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi ne pré-construit-on pas aussi les UseCases dans le composition root ?</p>
+    <label><input type="radio" name="q3" value="a"> Ce sont des struct sans état, bon marché à reconstruire au point d'usage</label>
+    <label><input type="radio" name="q3" value="b"> Swift interdit de stocker un UseCase comme propriété d'un type App</label>
+    <label><input type="radio" name="q3" value="c"> Un UseCase perdrait sa conformance Sendable s'il quittait sa vue d'origine</label>
+    <label><input type="radio" name="q3" value="d"> Le compilateur ne peut vérifier leur cohérence qu'au moment de l'appel</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">4. Que se passe-t-il si le composition root oublie d'injecter <code>downloadedSongsRepository</code> ?</p>
+    <label><input type="radio" name="q4" value="a"> L'app refuse de compiler tant que l'injection explicite n'est pas ajoutée</label>
+    <label><input type="radio" name="q4" value="b"> SwiftUI affiche un écran d'erreur rouge signalant l'environnement manquant</label>
+    <label><input type="radio" name="q4" value="c"> L'app tourne quand même, avec une instance vide jamais alimentée par les téléchargements</label>
+    <label><input type="radio" name="q4" value="d"> L'app plante immédiatement au lancement avec un message d'environnement manquant</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu hésites entre garder les dépendances "à plat" dans <code>KaramockApp</code> ou créer un <code>AppDependencies</code> dès maintenant ? Les deux sont défendables — demande à ton agent d'argumenter les deux côtés pour ton cas précis plutôt que d'appliquer une règle générale.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0009-bibliotheque-chansons-telechargees.html">← Leçon 9 : la Bibliothèque affiche les chansons téléchargées</a></span>
+    <span><a href="0011-refactoring-vers-factory.html">Leçon 11 : refactoring vers Factory →</a></span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

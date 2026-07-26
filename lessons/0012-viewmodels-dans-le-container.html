@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 12 — Les ViewModels dans le Container</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 12 · Architecture en couches (8/N)</p>
+  <h1>Les ViewModels dans le Container : la Vue n'injecte plus que ce dont elle a besoin</h1>
+  <p class="subtitle">La Leçon 11 a fait migrer <code>player</code>, <code>downloadedSongsRepository</code> et les deux UseCases vers <code>Container</code>. Mais <code>SongOptionsSheet</code> et <code>LibraryView</code> injectent encore un <em>UseCase</em> et construisent elles-mêmes leur ViewModel dans <code>.task</code>. Cette leçon pousse le graphe un cran plus loin : les ViewModels rejoignent aussi le <code>Container</code>, et chaque Vue n'injecte plus que le ViewModel dont elle a besoin.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> tu l'as repéré toi-même en relisant la Leçon 11 — <code>SongOptionsSheet</code> injecte <code>downloadSong: DownloadSongUseCase</code> puis l'assemble elle-même dans <code>SongDownloadViewModel(song:downloadSong:)</code>. C'est une fuite de couche : une Vue n'a normalement pas besoin de connaître les UseCases, seulement le ViewModel qui les orchestre pour elle. Faire porter cet assemblage par <code>Container</code> referme cette fuite, et complète la Dependency Rule appliquée à la construction (Leçon 10) jusqu'à la couche ViewModel.
+  </div>
+
+  <h2>Ce qui reste à corriger</h2>
+  <p>État actuel de <code>SongOptionsSheet</code>, tel que tu l'as poussé sur ta machine après la Leçon 11 :</p>
+  <pre><code>struct SongOptionsSheet: View {
+    @Injected(\.player) private var player
+    @Environment(\.dismiss) private var dismiss
+    @Injected(\.downloadSong) private var downloadSong
+
+    let song: Song
+    @State private var downloadViewModel: SongDownloadViewModel?
+    // …
+
+    var body: some View {
+        // …
+        .task {
+            if downloadViewModel == nil {
+                downloadViewModel = SongDownloadViewModel(song: song, downloadSong: downloadSong)
+            }
+        }
+    }
+}</code></pre>
+  <p><code>Container</code> a bien fini de cacher <code>DownloadedSongsRepository</code> à la Vue depuis la Leçon 11. Mais <code>SongOptionsSheet</code> connaît encore <code>DownloadSongUseCase</code> — elle l'injecte, puis sait comment l'assembler avec <code>song</code> pour produire un <code>SongDownloadViewModel</code>. Deux responsabilités qui n'ont rien à voir avec l'affichage d'une feuille d'options. L'objectif : que <code>SongOptionsSheet</code> ne connaisse plus que <code>SongDownloadViewModel</code>.</p>
+
+  <h2><code>ParameterFactory</code> : une fabrique qui prend un paramètre</h2>
+  <p><code>LibraryViewModel</code> ne dépend que d'un UseCase — rien de spécifique à une instance. Mais <code>SongDownloadViewModel</code> a besoin d'un <code>song: Song</code> précis à chaque résolution, un paramètre que <code>Container</code> ne peut pas deviner. Factory a un type dédié à ce cas, <code>ParameterFactory&lt;P, T&gt;</code>, défini directement dans le code source de la librairie :</p>
+  <pre><code>extension Container {
+    var parameterService: ParameterFactory&lt;Int, MyServiceType&gt; {
+        self { ParameterService(value: $0) }
+    }
+}
+
+let myService = Container.shared.parameterService(16)</code></pre>
+  <p>Le principe : le type du paramètre devient le premier paramètre générique, et la closure de fabrication le reçoit en argument. On résout en appelant la fabrique comme une fonction, avec la valeur en argument.</p>
+
+  <h2><code>Container</code> : les ViewModels s'ajoutent aux UseCases</h2>
+  <pre><code>import FactoryKit
+
+extension Container {
+    // player, downloadedSongsRepository, downloadSong, fetchDownloadedSongs : inchangés
+
+    @MainActor
+    var libraryViewModel: Factory&lt;LibraryViewModel&gt; {
+        self { LibraryViewModel(fetchDownloadedSongs: self.fetchDownloadedSongs()) }
+    }
+
+    @MainActor
+    var songDownloadViewModel: ParameterFactory&lt;Song, SongDownloadViewModel&gt; {
+        self { song in SongDownloadViewModel(song: song, downloadSong: self.downloadSong()) }
+    }
+}</code></pre>
+  <p>L'annotation <code>@MainActor</code> est nécessaire : <code>LibraryViewModel</code> et <code>SongDownloadViewModel</code> sont tous les deux <code>@MainActor @Observable final class</code> (Leçon 9), et Factory demande que la fabrique porte la même isolation que le type qu'elle construit.</p>
+
+  <h2><code>LibraryView</code> : <code>@InjectedObservable</code></h2>
+  <p><code>LibraryViewModel</code> ne prend pas de paramètre à la résolution, donc on peut l'injecter directement avec <code>@InjectedObservable</code>, le pendant observable de <code>@Injected</code> :</p>
+  <pre><code>import FactoryKit
+
+struct LibraryView: View {
+    @InjectedObservable(\.libraryViewModel) private var viewModel
+    @State private var selectedSong: Song?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if !viewModel.songs.isEmpty {
+                    List(viewModel.songs) { song in
+                        Button {
+                            selectedSong = song
+                        } label: {
+                            SongRow(song: song)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .listStyle(.plain)
+                } else {
+                    ContentUnavailableView(
+                        "Aucune chanson téléchargée",
+                        systemImage: "arrow.down.circle",
+                        description: Text("Télécharge une chanson depuis sa fiche pour la retrouver ici.")
+                    )
+                }
+            }
+            .navigationTitle("Bibliothèque")
+        }
+        .task { await viewModel.refresh() }
+        .refreshable { await viewModel.refresh() }
+        .sheet(item: $selectedSong) { song in
+            SongOptionsSheet(song: song)
+        }
+    }
+}</code></pre>
+  <p>Deux choses disparaissent en même temps : <code>@Injected(\.fetchDownloadedSongs)</code> — la Vue ne sait plus que ce UseCase existe — et tout le couple <code>@State private var viewModel: LibraryViewModel?</code> / <code>if viewModel == nil { viewModel = … }</code>. <code>viewModel</code> n'est plus optionnel : <code>@InjectedObservable</code> le résout une seule fois, à la première utilisation, comme le documente Factory lui-même.</p>
+
+  <h2><code>SongOptionsSheet</code> : la limite du compile-time safe</h2>
+  <p>Ici, <code>@Injected</code>/<code>@InjectedObservable</code> ne suffisent pas. Le code source de Factory est explicite sur ce point : une <code>ParameterFactory</code> ne peut pas être injectée par un property wrapper, faute de moyen de lui transmettre le paramètre avant l'initialisation de ce wrapper. Il faut donc appeler le <code>Container</code> directement — mais seulement pour résoudre le ViewModel, plus le UseCase :</p>
+  <pre><code>import FactoryKit
+
+struct SongOptionsSheet: View {
+    @Injected(\.player) private var player
+    @Environment(\.dismiss) private var dismiss
+
+    let song: Song
+    @State private var downloadViewModel: SongDownloadViewModel?
+    // … le reste de l'état du formulaire, inchangé
+
+    var body: some View {
+        // … inchangé
+        .task {
+            if downloadViewModel == nil {
+                downloadViewModel = Container.shared.songDownloadViewModel(song)
+            }
+        }
+    }
+}</code></pre>
+  <p><code>SongOptionsSheet</code> ne référence plus ni <code>DownloadedSongsRepository</code> ni <code>DownloadSongUseCase</code> — seulement <code>SongDownloadViewModel</code>, le seul type dont elle a réellement besoin pour s'afficher.</p>
+
+  <table class="compare-table">
+    <tr><th>Avant (Leçon 11)</th><th>Après (Leçon 12)</th></tr>
+    <tr><td>La Vue injecte un UseCase (<code>@Injected(\.downloadSong)</code>)</td><td>La Vue résout directement son ViewModel</td></tr>
+    <tr><td>La Vue assemble elle-même le ViewModel dans <code>.task</code></td><td><code>Container</code> assemble le ViewModel, UseCase compris</td></tr>
+    <tr><td><code>LibraryView</code> gère un <code>viewModel</code> optionnel à initialiser</td><td><code>@InjectedObservable</code> résout une fois, type non optionnel</td></tr>
+    <tr><td>La Vue doit connaître la signature du ViewModel pour l'appeler</td><td>La Vue ne connaît que le keyPath ou la fabrique à appeler</td></tr>
+  </table>
+
+  <details class="aside">
+    <summary>Pourquoi <code>SongOptionsSheet</code> appelle encore <code>Container.shared</code> directement</summary>
+    <p>Ce n'est pas une régression par rapport à <code>@Injected</code> — c'est une limite documentée de <code>ParameterFactory</code> elle-même : un property wrapper est initialisé avant que la vue n'ait la moindre chance de lui fournir un paramètre à l'exécution, donc il ne peut tout simplement pas exister d'<code>@Injected</code> paramétré. Factory documente lui-même ce contournement — appeler le Container directement reste la seule solution pour ce cas précis, y compris dans les exemples officiels de la librairie. Le gain reste réel : ce que la Vue connaît s'arrête au ViewModel, elle n'a plus besoin de savoir qu'un UseCase ou un Repository existent derrière.</p>
+  </details>
+
+  <details class="aside">
+    <summary><code>.singleton</code> sur un ViewModel : une fausse bonne idée</summary>
+    <p><code>libraryViewModel</code> et <code>songDownloadViewModel</code> restent volontairement au scope par défaut (<code>.unique</code>), sans <code>.singleton</code>. Un ViewModel porte un état propre à un écran affiché à un instant donné (<code>songs</code>, <code>state</code>) — le passer en singleton ferait fuiter cet état d'une apparition de la Vue à la suivante, exactement le problème inverse de celui que <code>.singleton</code> résout pour <code>player</code> (Leçon 11), qui lui doit rester partagé entre tous les écrans.</p>
+  </details>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://github.com/hmlongco/Factory/blob/main/Sources/FactoryKit/FactoryKit/Factory.swift">Factory.swift</a> et <a href="https://github.com/hmlongco/Factory/blob/main/Sources/FactoryKit/FactoryKit/Injections.swift">Injections.swift</a> sur le dépôt officiel — les commentaires de documentation au-dessus de <code>ParameterFactory</code> et <code>InjectedObservable</code> couvrent exactement les deux mécanismes de cette leçon, avec leurs limites.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi <code>LibraryViewModel</code> peut utiliser <code>@InjectedObservable</code> alors que <code>SongDownloadViewModel</code> ne le peut pas ?</p>
+    <label><input type="radio" name="q1" value="a"> LibraryViewModel n'est pas marqué @Observable, contrairement à SongDownloadViewModel</label>
+    <label><input type="radio" name="q1" value="b"> SongDownloadViewModel a besoin d'un paramètre (song) inconnu avant la résolution</label>
+    <label><input type="radio" name="q1" value="c"> SongDownloadViewModel dépend de deux UseCases au lieu d'un seul</label>
+    <label><input type="radio" name="q1" value="d"> LibraryViewModel est enregistré en scope .singleton dans le Container</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Que devient <code>@State private var viewModel: LibraryViewModel?</code> dans <code>LibraryView</code> après cette leçon ?</p>
+    <label><input type="radio" name="q2" value="a"> Il devient @Environment(\.libraryViewModel), toujours optionnel</label>
+    <label><input type="radio" name="q2" value="b"> Il reste identique, seul le contenu du .task change</label>
+    <label><input type="radio" name="q2" value="c"> Il devient une constante let assignée dans l'init de la Vue</label>
+    <label><input type="radio" name="q2" value="d"> Il disparaît, remplacé par @InjectedObservable, non optionnel</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi <code>songDownloadViewModel</code> et <code>libraryViewModel</code> restent-ils au scope <code>.unique</code> plutôt que <code>.singleton</code> ?</p>
+    <label><input type="radio" name="q3" value="a"> Un singleton ferait fuiter l'état d'un écran vers les apparitions suivantes de la Vue</label>
+    <label><input type="radio" name="q3" value="b"> Factory interdit .singleton sur tout type portant @MainActor</label>
+    <label><input type="radio" name="q3" value="c"> ParameterFactory ne supporte techniquement aucun scope autre que .unique</label>
+    <label><input type="radio" name="q3" value="d"> Les ViewModels n'implémentent pas Observable donc aucun scope n'agit sur eux</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">4. Que connaît encore <code>SongOptionsSheet</code> après cette leçon, dans sa dépendance au domaine ?</p>
+    <label><input type="radio" name="q4" value="a"> Rien : la Vue ne fait plus aucun appel à Container.shared</label>
+    <label><input type="radio" name="q4" value="b"> DownloadedSongsRepository, mais plus DownloadSongUseCase</label>
+    <label><input type="radio" name="q4" value="c"> Seulement SongDownloadViewModel, résolu via Container.shared</label>
+    <label><input type="radio" name="q4" value="d"> DownloadSongUseCase, injecté avec @Injected comme en Leçon 11</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu te demandes si ce principe doit s'appliquer à toutes les Vues du projet, même les plus simples qui n'ont pas de ViewModel du tout ? Demande à ton agent où tracer la limite entre "assez simple pour rester dans la Vue" et "mérite son propre ViewModel enregistré".</p>
+
+  <div class="lesson-nav">
+    <span><a href="0011-refactoring-vers-factory.html">← Leçon 11 : refactoring vers Factory</a></span>
+    <span>Leçon suivante : Tests (Swift Testing)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 11 — Refactoring vers Factory</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 11 · Architecture en couches (6/N)</p>
+  <h1>Refactoring vers Factory : une librairie de DI compile-time safe</h1>
+  <p class="subtitle">La Leçon 10 a construit un composition root à la main, avec seulement du SwiftUI. Cette leçon reprend exactement le même graphe de dépendances — <code>player</code>, <code>downloadedSongsRepository</code>, les deux UseCases — et le fait migrer vers <a href="https://github.com/hmlongco/Factory"><code>Factory</code></a>, pour voir concrètement ce qu'une librairie dédiée change, sur un exemple qu'on connaît déjà par cœur.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> le composition root manuel de la Leçon 10 fonctionne très bien à l'échelle de ce projet (2 dépendances partagées). Mais reconnaître et manipuler une librairie de DI container-based fait partie du bagage attendu pour du Swift/Apple Platforms sur le marché actuel. Factory est la référence pour un projet SwiftUI neuf en 2026 : compile-time safe, pensée pour <code>@Observable</code>/<code>@Environment</code>, et explicitement alignée avec la concurrence stricte de Swift 6.
+  </div>
+
+  <h2>Installer Factory</h2>
+  <p>Dans Xcode : <em>File → Add Package Dependencies…</em>, puis colle <code>https://github.com/hmlongco/Factory.git</code>. Sélectionne le produit <code>FactoryKit</code> pour la cible de l'app (le nom du produit n'est pas <code>Factory</code> tout court — la librairie l'a renommé pour éviter un conflit avec son propre type <code>Factory&lt;T&gt;</code>). Si tu ajoutes des tests plus tard, la cible de test aura aussi besoin du produit <code>FactoryTesting</code>.</p>
+
+  <h2>Le <code>Container</code> remplace <code>KaramockApp</code> comme composition root</h2>
+  <p>Chez Factory, chaque dépendance est une propriété calculée sur une extension de <code>Container</code>, qui retourne un <code>Factory&lt;Type&gt;</code> :</p>
+
+  <pre><code>import FactoryKit
+
+extension Container {
+    var player: Factory&lt;PlayerState&gt; {
+        self { PlayerState() }
+            .singleton
+    }
+
+    var downloadedSongsRepository: Factory&lt;DownloadedSongsRepository&gt; {
+        self { InMemoryDownloadedSongsRepository() }
+            .singleton
+    }
+
+    var downloadSong: Factory&lt;DownloadSongUseCase&gt; {
+        self { DownloadSongUseCase(repository: self.downloadedSongsRepository()) }
+    }
+
+    var fetchDownloadedSongs: Factory&lt;FetchDownloadedSongsUseCase&gt; {
+        self { FetchDownloadedSongsUseCase(repository: self.downloadedSongsRepository()) }
+    }
+}</code></pre>
+
+  <p><code>player</code> et <code>downloadedSongsRepository</code> portent <code>.singleton</code> : une seule instance, partagée par toute l'app — c'est le rôle que jouait <code>@State</code> dans <code>KaramockApp</code> à la Leçon 10. Les deux UseCases, eux, restent au scope par défaut (<code>.unique</code>) : une nouvelle instance à chaque résolution. C'est exactement le même raisonnement qu'en Leçon 10 — des <code>struct</code> sans état, bon marché à reconstruire — seule la façon dont cette reconstruction est déclenchée change : avant, un appel explicite au point d'usage ; maintenant, une résolution via le container.</p>
+
+  <h2><code>KaramockApp</code> redevient minimal</h2>
+  <pre><code>@main
+struct KaramockApp: App {
+    var body: some Scene {
+        WindowGroup {
+            RootTabView()
+        }
+    }
+}</code></pre>
+  <p>Le composition root n'a pas disparu : il a déménagé. Ce n'était pas une propriété intrinsèque de <code>KaramockApp</code> — c'était le seul endroit du projet où <code>InMemoryDownloadedSongsRepository()</code> apparaissait. Maintenant c'est l'extension de <code>Container</code> qui joue ce rôle. Le point à retenir : le composition root est une <strong>responsabilité</strong>, pas un fichier précis — elle peut se déplacer quand l'outillage change.</p>
+
+  <h2>Chaque vue déclare ce dont elle a besoin, directement</h2>
+  <p><code>RootTabView</code> — même correction qu'en Leçon 10, <code>@Injected</code> ne donnant pas plus de projection <code>$</code> que <code>@Environment</code> : la ligne <code>@Bindable var player = player</code> reste nécessaire en tout premier dans <code>body</code> :</p>
+  <pre><code>import FactoryKit
+
+struct RootTabView: View {
+    @Injected(\.player) private var player
+
+    var body: some View {
+        @Bindable var player = player  // doit être la première ligne de body
+
+        TabView {
+            DiscoveryView()
+                .tabItem {
+                    Label("Découvrir", systemImage: "book.closed.fill")
+                }
+            LibraryView()
+                .tabItem {
+                    Label("Bibliothèque", systemImage: "music.note.list")
+                }
+        }
+        .overlay(alignment: .bottom) {
+            if let song = player.currentSong, !player.isExpanded {
+                MiniPlayerBar(song: song)
+                    .padding(.bottom, 49)
+            }
+        }
+        .fullScreenCover(isPresented: $player.isExpanded) {
+            if let song = player.currentSong {
+                FullScreenPlayerView(song: song)
+            }
+        }
+    }
+}</code></pre>
+
+  <p>Remarque ce qui a disparu : plus aucun <code>.environment(\.player, player)</code>. Avec <code>@Environment</code>, chaque vue ancêtre devait explicitement réinjecter la valeur pour que ses enfants la reçoivent. Avec <code>@Injected</code>, chaque vue résout directement depuis le <code>Container</code> partagé, où qu'elle se trouve dans la hiérarchie — plus besoin de propager manuellement à travers les vues intermédiaires.</p>
+
+  <p><code>SongOptionsSheet</code> — c'est ici que le gain est le plus visible :</p>
+  <pre><code>import FactoryKit
+
+struct SongOptionsSheet: View {
+    @Injected(\.player) private var player
+    @Environment(\.dismiss) private var dismiss
+    @Injected(\.downloadSong) private var downloadSong
+
+    let song: Song
+    @State private var downloadViewModel: SongDownloadViewModel?
+    // … le reste de l'état du formulaire, inchangé
+
+    var body: some View {
+        // … inchangé
+        .task {
+            if downloadViewModel == nil {
+                downloadViewModel = SongDownloadViewModel(song: song, downloadSong: downloadSong)
+            }
+        }
+    }
+}</code></pre>
+  <p>Avant, <code>SongOptionsSheet</code> lisait <code>downloadedSongsRepository</code> depuis l'environnement puis construisait elle-même <code>DownloadSongUseCase(repository: downloadedSongsRepository)</code> — la vue devait donc savoir que ce UseCase a besoin d'un repository. Maintenant elle injecte directement <code>downloadSong</code>, déjà assemblé : la vue ne sait même plus que <code>DownloadedSongsRepository</code> existe. Le câblage a fini de migrer entièrement vers le <code>Container</code>.</p>
+
+  <p><code>LibraryView</code> suit exactement le même principe avec <code>fetchDownloadedSongs</code> — je ne la réécris pas en entier, seule la ligne d'injection change : <code>@Injected(\.fetchDownloadedSongs) private var fetchDownloadedSongs</code>, puis <code>LibraryViewModel(fetchDownloadedSongs: fetchDownloadedSongs)</code> dans le <code>.task</code>.</p>
+
+  <table class="compare-table">
+    <tr><th>Composition root manuel (Leçon 10)</th><th>Factory (Leçon 11)</th></tr>
+    <tr><td>Graphe déclaré dans <code>KaramockApp</code> (<code>@State</code> + <code>.environment()</code>)</td><td>Graphe déclaré dans une extension de <code>Container</code></td></tr>
+    <tr><td>Une vue récupère une dépendance via <code>@Environment(\.keyPath)</code></td><td>Une vue récupère une dépendance via <code>@Injected(\.keyPath)</code></td></tr>
+    <tr><td>Doit être réinjectée explicitement à chaque ancêtre de la hiérarchie</td><td>Résolue directement, où que la vue se trouve</td></tr>
+    <tr><td>Dépendance manquante → valeur par défaut du <code>@Entry</code>, silencieuse</td><td>Dépendance manquante → le code ne compile pas</td></tr>
+  </table>
+
+  <details class="aside">
+    <summary>Ce que "compile-time safe" veut dire concrètement</summary>
+    <p>Si tu supprimes la propriété <code>downloadSong</code> de l'extension <code>Container</code> mais que <code>SongOptionsSheet</code> continue d'écrire <code>@Injected(\.downloadSong)</code>, le projet ne compile plus : <code>\.downloadSong</code> n'existe pas sur <code>Container</code>, erreur immédiate. C'est très différent d'un container résolu au runtime par réflexion, où une dépendance non enregistrée compile sans problème et ne crashe qu'au moment précis où le code tente de la résoudre — potentiellement bien après le déploiement. Le README de Factory revendique explicitement cette propriété : <em>"a factory for a given type must exist or the code simply will not compile"</em>. Factory 3.0 annonce aussi être conçu <em>"under Strict Concurrency guidelines"</em> — cohérent avec toute la rigueur Swift 6 déjà en place dans ce projet depuis la Leçon 7.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Previews et tests : remplacer une dépendance sans toucher au Container</summary>
+    <p>Le <code>Container</code> partagé reste modifiable ponctuellement — utile pour un Preview ou un test qui veut éviter le comportement par défaut :</p>
+    <pre><code>#Preview {
+    Container.shared.fetchDownloadedSongs { MockFetchDownloadedSongsUseCase() }
+    LibraryView()
+}</code></pre>
+    <p>Cette ligne remplace la fabrique par défaut juste pour ce Preview, sans modifier l'extension <code>Container</code> elle-même. C'est le même mécanisme qui rendra les tests de la prochaine leçon simples à écrire : chaque test peut substituer exactement la dépendance qu'il veut observer, sans reconstruire tout le graphe à la main.</p>
+  </details>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://github.com/hmlongco/Factory">Dépôt officiel Factory</a> (Michael Long / hmlongco) — le README couvre l'enregistrement, la résolution, les scopes, le mocking et l'usage avec Swift Testing en détail.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi un <code>@Injected(\.downloadSong)</code> vers une propriété jamais déclarée sur <code>Container</code> empêche-t-il le projet de compiler ?</p>
+    <label><input type="radio" name="q1" value="a"> Factory exige un test unitaire dédié pour chaque propriété avant de compiler</label>
+    <label><input type="radio" name="q1" value="b"> Le mot-clé @Injected est réservé et ne peut viser que des singletons</label>
+    <label><input type="radio" name="q1" value="c"> La keyPath référence une propriété inexistante sur Container, donc invalide</label>
+    <label><input type="radio" name="q1" value="d"> Xcode bloque la compilation tant que FactoryTesting n'est pas ajouté</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Pourquoi <code>player</code> et <code>downloadedSongsRepository</code> utilisent <code>.singleton</code> alors que les deux UseCases restent en scope par défaut ?</p>
+    <label><input type="radio" name="q2" value="a"> Les UseCases n'implémentent pas Sendable donc ne peuvent pas être singleton</label>
+    <label><input type="radio" name="q2" value="b"> Factory limite le nombre total de singletons déclarables par Container</label>
+    <label><input type="radio" name="q2" value="c"> Un scope par défaut serait ignoré silencieusement pour un type Observable</label>
+    <label><input type="radio" name="q2" value="d"> Les deux premiers sont un état partagé, les UseCases sont des struct sans état</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Qu'est devenu <code>KaramockApp</code> après la migration vers Factory ?</p>
+    <label><input type="radio" name="q3" value="a"> Un type minimal de trois lignes ; le composition root a déménagé vers Container</label>
+    <label><input type="radio" name="q3" value="b"> Il a disparu, Factory génère automatiquement un point d'entrée à sa place</label>
+    <label><input type="radio" name="q3" value="c"> Il est devenu la cible des tests unitaires du graphe de dépendances</label>
+    <label><input type="radio" name="q3" value="d"> Il doit maintenant hériter d'une classe de base fournie par FactoryKit</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">4. Comment remplacer une dépendance pour un Preview sans modifier l'extension <code>Container</code> ?</p>
+    <label><input type="radio" name="q4" value="a"> Créer un second Container distinct uniquement visible depuis les Previews</label>
+    <label><input type="radio" name="q4" value="b"> Réassigner sa fabrique sur Container.shared juste avant d'afficher la vue</label>
+    <label><input type="radio" name="q4" value="c"> Ajouter un paramètre optionnel à l'initialiseur de chaque vue concernée</label>
+    <label><input type="radio" name="q4" value="d"> Compiler une configuration Debug séparée avec des fabriques différentes</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu te demandes s'il faut migrer tout le graphe d'un coup ou petit à petit, écran par écran ? Demande à ton agent d'évaluer les deux stratégies pour un vrai projet en cours de développement (pas seulement pour cet exercice).</p>
+
+  <div class="lesson-nav">
+    <span><a href="0010-composition-root.html">← Leçon 10 : composition root</a></span>
+    <span><a href="0012-viewmodels-dans-le-container.html">Leçon suivante : ViewModels dans le Container →</a></span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
