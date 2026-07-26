@@ -9,7 +9,6 @@ import SwiftUI
 
 @main
 struct KaramockApp: App {
-    
     var body: some Scene {
         WindowGroup {
             RootTabView()

@@ -13,23 +13,25 @@ struct PlaylistDetailView: View {
     @State private var selectedSong: Song?
     
     var body: some View {
-        VStack(spacing: 0) {
-            PlaylistCoverHeader(playlist: playlist)
-            
-            List(playlist.songs) { song in
-                Button {
-                    selectedSong = song
-                } label: {
-                    SongRow(song: song)
+        ScrollView {
+            VStack(spacing: 0) {
+                PlaylistCoverHeader(playlist: playlist)
+                
+                ForEach(playlist.songs) { song in
+                    Button {
+                        selectedSong = song
+                    } label: {
+                        SongRow(song: song)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
-            .listStyle(.plain)
-        }
-        .navigationTitle(playlist.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $selectedSong) { song in
-            SongOptionsSheet(song: song)
+            .ignoresSafeArea(edges: .top)
+            .navigationTitle(playlist.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $selectedSong) { song in
+                SongOptionsSheet(song: song)
+            }
         }
     }
 }

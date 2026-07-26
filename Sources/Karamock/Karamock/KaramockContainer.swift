@@ -8,20 +8,23 @@
 import FactoryKit
 
 extension Container {
+    @MainActor
     var player: Factory<PlayerState> {
         self { PlayerState() }
             .singleton
     }
     
     var downloadedSongsRepository: Factory<DownloadedSongsRepository> {
-        self { InMemoryDownloadedSongsRepository() }
+        self { SimpleDownloadedSongsRepository() }
             .singleton
     }
     
+    @MainActor
     var downloadSong: Factory<DownloadSongUseCase> {
-        self { DownloadSongUseCase(repository: self.downloadedSongsRepository()) }
+        self { DownloadSongUseCase(service: MockSongDownloading(), repository: self.downloadedSongsRepository()) }
     }
     
+    @MainActor
     var fetchDownloadedSongs: Factory<FetchDownloadedSongsUseCase> {
         self { FetchDownloadedSongsUseCase(repository: self.downloadedSongsRepository()) }
     }

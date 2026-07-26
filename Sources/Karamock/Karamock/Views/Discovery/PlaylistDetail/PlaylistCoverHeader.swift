@@ -21,5 +21,6 @@ struct PlaylistCoverHeader: View {
                 .multilineTextAlignment(.center)
                 .padding()
         }
+        .stretchy()
     }
 }

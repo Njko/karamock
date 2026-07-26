@@ -10,7 +10,7 @@ struct DownloadSongUseCase: Sendable {
     let repository: DownloadedSongsRepository
     
     init(
-        service: SongDownloading = MockSongDownloading(),
+        service: SongDownloading,
         repository: DownloadedSongsRepository
     ) {
         self.service = service
