@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 14 — VoiceOver : nommer les boutons du lecteur</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 14 · Accessibilité (1/N)</p>
+  <h1>VoiceOver : nommer les boutons icône-seule du lecteur</h1>
+  <p class="subtitle">Après l'architecture (Leçons 6 à 12) et les tests (Leçon 13), un nouvel axe : l'accessibilité. Premier point d'entrée, concret : <code>MiniPlayerBar</code> et <code>FullScreenPlayerView</code> ont quatre boutons qui ne sont composés que d'une icône — et VoiceOver n'a aujourd'hui aucun moyen de dire à l'utilisateur ce qu'ils font.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> l'accessibilité était un axe confirmé pour la suite dès que l'architecture et les tests seraient posés (voir <code>learning-records/0003-...</code>). Ce n'est pas un sujet réservé aux développeurs : designers, product, QA — toute l'équipe partage la responsabilité de ne pas exclure une partie des utilisateurs. Mais ça suppose que le sujet soit discutable par tous, pas caché derrière une checklist de conformité que seuls les devs consultent. Savoir pointer un vrai écran, dire précisément ce que VoiceOver annonce aujourd'hui, et expliquer un correctif en une phrase simple — c'est ce qui rend un manquement d'accessibilité visible et discutable en équipe, pas seulement réparable en silence.
+  </div>
+
+  <h2>Ce que VoiceOver annonce aujourd'hui</h2>
+  <p>Le bouton play/pause de <code>MiniPlayerBar</code>, tel qu'il existe sur ta machine :</p>
+  <pre><code>Button {
+    player.isPlaying.toggle()
+} label: {
+    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+        .font(.title3)
+}
+.buttonStyle(.plain)</code></pre>
+  <p>Ce n'est pas silencieux : les SF Symbols portent une étiquette d'accessibilité intégrée par le système, dérivée du nom du symbole. Mais cette étiquette décrit <strong>l'icône</strong>, pas <strong>l'action</strong> — et elle arrive dans la langue système de l'appareil, généralement en anglais. Résultat concret ici : un utilisateur VoiceOver sur un iPhone en français entendrait une description d'icône en anglais, au milieu d'une app entièrement rédigée en français ("Chanté par", "Ajouter à la file d'attente", etc.). Le même problème existe pour le bouton de fermeture (<code>chevron.down</code>) et les boutons piste précédente/suivante de <code>FullScreenPlayerView</code>.</p>
+
+  <h2>Nommer par l'action, pas par l'icône</h2>
+  <p><code>MiniPlayerBar</code> — l'étiquette doit changer avec l'état, exactement comme l'icône :</p>
+  <pre><code>Button {
+    player.isPlaying.toggle()
+} label: {
+    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+        .font(.title3)
+}
+.buttonStyle(.plain)
+.accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")</code></pre>
+  <p><code>FullScreenPlayerView</code> — les quatre boutons du bas et le bouton de fermeture :</p>
+  <pre><code>Button {
+    dismiss()
+} label: {
+    Image(systemName: "chevron.down")
+        .font(.title3)
+}
+.accessibilityLabel("Fermer")
+
+// …
+
+Button { } label: {
+    Image(systemName: "backward.fill").font(.title)
+}
+.accessibilityLabel("Piste précédente")
+
+Button {
+    player.isPlaying.toggle()
+} label: {
+    Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+        .font(.system(size: 64))
+}
+.accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
+
+Button { } label: {
+    Image(systemName: "forward.fill").font(.title)
+}
+.accessibilityLabel("Piste suivante")</code></pre>
+  <p>Les boutons piste précédente/suivante n'ont pas encore d'action câblée (hors périmètre de la mission, Leçon 5) — ça n'empêche pas de leur donner un nom correct dès maintenant : un utilisateur VoiceOver qui explore l'écran au doigt doit pouvoir identifier chaque contrôle visible, que son action soit branchée ou non.</p>
+
+  <details class="aside">
+    <summary>Vérifier sans attendre la prochaine leçon</summary>
+    <p>Deux façons rapides de constater le changement : dans Xcode, <em>Open Developer Tool → Accessibility Inspector</em>, pointer un élément du Simulateur et lire le champ "Label". Ou directement sur le Simulateur/l'appareil : <em>Réglages → Accessibilité → VoiceOver</em>, puis naviguer l'écran au doigt — chaque bouton doit maintenant s'annoncer par son action ("Lire, bouton", "Fermer, bouton") plutôt que par le nom brut de l'icône.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Piège repéré, pas encore corrigé : le <code>.onTapGesture</code> de <code>MiniPlayerBar</code></summary>
+    <p><code>MiniPlayerBar</code> tout entier réagit à <code>.onTapGesture { player.isExpanded = true }</code> pour ouvrir le lecteur plein écran — mais ce n'est pas un <code>Button</code>. Un <code>.onTapGesture</code> posé sur une <code>HStack</code> quelconque ne donne pas automatiquement le trait <code>.isButton</code> à l'élément : VoiceOver peut l'annoncer comme du simple contenu statique, sans indiquer qu'il est activable. Le correctif — <code>.accessibilityAddTraits(.isButton)</code>, ou remplacer le geste par un vrai <code>Button</code> — est volontairement laissé pour une prochaine leçon, pour garder celle-ci concentrée sur un seul sujet : nommer ce qui est déjà un bouton.</p>
+  </details>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>VoiceOver lit l'étiquette système du symbole SF</td><td>VoiceOver lit une étiquette qui décrit l'action, en français</td></tr>
+    <tr><td>L'étiquette ne dépend pas de l'état du lecteur</td><td>L'étiquette suit <code>player.isPlaying</code>, comme l'icône</td></tr>
+    <tr><td>Boutons non câblés (précédent/suivant) sans nom</td><td>Nommés dès maintenant, même sans action branchée</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://www.createwithswift.com/preparing-your-app-for-voiceover-use-accessibility-label/">Preparing your App for VoiceOver: use Accessibility Label</a> (createwithswift.com) — explique précisément pourquoi une icône SF Symbol seule ne suffit pas, avec des exemples SwiftUI directement comparables à <code>MiniPlayerBar</code>.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi le bouton play/pause de <code>MiniPlayerBar</code> n'est-il pas totalement silencieux pour VoiceOver, même sans <code>accessibilityLabel</code> ?</p>
+    <label><input type="radio" name="q1" value="a"> SwiftUI génère automatiquement une traduction française pour chaque bouton</label>
+    <label><input type="radio" name="q1" value="b"> Les SF Symbols portent une étiquette système dérivée du nom du symbole</label>
+    <label><input type="radio" name="q1" value="c"> Tout Button sans label reçoit par défaut le texte "Bouton sans nom"</label>
+    <label><input type="radio" name="q1" value="d"> VoiceOver annonce le nom de la variable Swift utilisée dans le code</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Pourquoi l'étiquette système d'un SF Symbol ne suffit-elle pas dans Karamock spécifiquement ?</p>
+    <label><input type="radio" name="q2" value="a"> Les SF Symbols n'existent pas encore pour les icônes play et pause</label>
+    <label><input type="radio" name="q2" value="b"> Le Simulateur iOS désactive les étiquettes système par défaut</label>
+    <label><input type="radio" name="q2" value="c"> accessibilityLabel est obligatoire dès qu'un bouton change d'icône</label>
+    <label><input type="radio" name="q2" value="d"> Elle décrit l'icône dans la langue système, alors que l'app est en français</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi <code>.accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")</code> plutôt qu'un texte fixe comme "Lecture" ?</p>
+    <label><input type="radio" name="q3" value="a"> L'étiquette doit refléter l'action qui suivra le tap, comme l'icône le fait déjà</label>
+    <label><input type="radio" name="q3" value="b"> Un texte fixe provoquerait une erreur de compilation sur ce type de bouton</label>
+    <label><input type="radio" name="q3" value="c"> VoiceOver ignore les étiquettes qui ne changent jamais de valeur</label>
+    <label><input type="radio" name="q3" value="d"> Factory exige que toute chaîne affichée passe par le Container</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">4. Pourquoi donner un <code>accessibilityLabel</code> aux boutons piste précédente/suivante alors qu'ils n'ont pas encore d'action câblée ?</p>
+    <label><input type="radio" name="q4" value="a"> Sans étiquette, Xcode refuse de compiler un Button à action vide</label>
+    <label><input type="radio" name="q4" value="b"> L'étiquette câble automatiquement une action par défaut au bouton</label>
+    <label><input type="radio" name="q4" value="c"> Un utilisateur VoiceOver doit pouvoir identifier chaque contrôle visible à l'écran</label>
+    <label><input type="radio" name="q4" value="d"> C'est une exigence spécifique aux boutons utilisant SF Symbols circulaires</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu veux corriger le piège du <code>.onTapGesture</code> de <code>MiniPlayerBar</code> dès maintenant plutôt que d'attendre la prochaine leçon ? Demande à ton agent de comparer <code>.accessibilityAddTraits(.isButton)</code> et le remplacement par un vrai <code>Button</code> stylé en <code>.plain</code>.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0013-tests-swift-testing.html">← Leçon 13 : tests avec Swift Testing</a></span>
+    <span>Leçon suivante : Accessibilité — traits et actions personnalisées</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
