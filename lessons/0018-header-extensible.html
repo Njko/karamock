@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 18 — Le header extensible de la fiche playlist</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 18 · Interface (1/N)</p>
+  <h1>Le header extensible de la fiche playlist</h1>
+  <p class="subtitle">En testant la Leçon 17 sur un vrai appareil, tu as repéré deux problèmes en un : le header de <code>PlaylistDetailView</code> n'était ni dans le scroll, ni sous la barre de statut. Cette leçon va plus loin que le simple correctif structurel — elle reproduit l'effet "extensible" (<em>stretchy header</em>) qu'on voit sur tes captures de référence (<code>02-playlist-detail</code>) : l'image grandit quand on tire l'écran vers le bas, puis défile normalement.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> ce n'est pas une leçon théorique choisie à l'avance — elle existe parce que tu as testé l'app sur un vrai appareil et jugé le rendu "particulièrement moche". C'est exactement le genre d'écart entre "ça compile et ça a l'air correct dans le code" et "ça se sent bien en main" que seul un vrai test découvre, et que la mission demande de reproduire fidèlement (captures de référence dans <code>reference/screenshots/</code>).
+  </div>
+
+  <h2>Le point de départ : structurer le scroll</h2>
+  <p><code>PlaylistDetailView</code> aujourd'hui sépare le header (fixe) de la liste (son propre scroll) :</p>
+  <pre><code>var body: some View {
+    VStack(spacing: 0) {
+        PlaylistCoverHeader(playlist: playlist)
+
+        List(playlist.songs) { song in
+            Button { selectedSong = song } label: { SongRow(song: song) }
+                .buttonStyle(.plain)
+        }
+        .listStyle(.plain)
+    }
+    .navigationTitle(playlist.title)
+    .navigationBarTitleDisplayMode(.inline)
+    // …
+}</code></pre>
+  <p><code>List</code> est remplacé par un <code>ScrollView</code> + <code>VStack</code> classique — rien ici n'utilise de fonctionnalité propre à <code>List</code> (sections, swipe actions) — pour que le header et les chansons ne fassent plus qu'un seul contenu défilant :</p>
+  <pre><code>var body: some View {
+    ScrollView {
+        VStack(spacing: 0) {
+            PlaylistCoverHeader(playlist: playlist)
+
+            ForEach(playlist.songs) { song in
+                Button { selectedSong = song } label: { SongRow(song: song).padding(.horizontal) }
+                    .buttonStyle(.plain)
+            }
+        }
+    }
+    .ignoresSafeArea(edges: .top)
+    .navigationBarTitleDisplayMode(.inline)
+    // …
+}</code></pre>
+  <p><code>.ignoresSafeArea(edges: .top)</code> se pose sur le <code>ScrollView</code> lui-même, pas sur le header : comme <code>PlaylistCoverHeader</code> est le tout premier élément du contenu défilant, c'est lui qui vient occuper l'espace ainsi libéré sous la barre de statut — rien d'autre dans la liste n'est affecté, puisque le header reste avant eux dans l'ordre du <code>VStack</code>.</p>
+
+  <h2>L'effet extensible</h2>
+  <p>Un modificateur réutilisable, à part — <code>Views/Common/View+Stretchy.swift</code> :</p>
+  <pre><code>extension View {
+    func stretchy() -> some View {
+        visualEffect { effect, geometry in
+            let currentHeight = geometry.size.height
+            let scrollOffset = geometry.frame(in: .scrollView).minY
+            let positiveOffset = max(0, scrollOffset)
+
+            let newHeight = currentHeight + positiveOffset
+            let scaleFactor = newHeight / currentHeight
+
+            return effect.scaleEffect(
+                x: scaleFactor, y: scaleFactor,
+                anchor: .bottom
+            )
+        }
+    }
+}</code></pre>
+  <p><code>visualEffect</code> donne accès à la géométrie de la vue à chaque frame, sans passer par un <code>GeometryReader</code> qui casserait la mise en page environnante. <code>geometry.frame(in: .scrollView).minY</code> lit la position de la vue par rapport au <code>ScrollView</code> parent — <code>.scrollView</code> est un espace de coordonnées intégré à SwiftUI, pensé précisément pour ce cas. Tant que l'utilisateur scrolle normalement vers le bas, <code>minY</code> devient négatif ou nul : <code>max(0, scrollOffset)</code> ramène ça à zéro, donc <code>scaleFactor</code> reste à 1 — aucun effet. C'est seulement pendant un <em>overscroll</em> en haut (l'utilisateur tire l'écran vers le bas, au-delà de sa position de repos) que <code>minY</code> devient positif, et que la vue s'agrandit en proportion.</p>
+
+  <p>Appliqué à <code>PlaylistCoverHeader</code> :</p>
+  <pre><code>struct PlaylistCoverHeader: View {
+    let playlist: Playlist
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                .frame(minHeight: 220)
+
+            Text(playlist.title)
+                .font(.title2.bold())
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .padding()
+        }
+        .stretchy()
+    }
+}</code></pre>
+  <p><code>.stretchy()</code> est posé sur le <code>ZStack</code> entier, pas seulement sur le dégradé — dégradé et titre grandissent ensemble pendant l'overscroll, exactement comme sur les captures de référence. Le <code>ZStack</code> conserve tout ce qui a été construit en Leçon 17 (la correction Dynamic Type) sans aucune modification : <code>.stretchy()</code> n'agit qu'au moment du geste de traction, un problème entièrement différent de la taille de police.</p>
+
+  <details class="aside">
+    <summary>Pourquoi <code>anchor: .bottom</code> plutôt que <code>.center</code> ou <code>.top</code></summary>
+    <p><code>scaleEffect(anchor:)</code> détermine le point fixe autour duquel la vue grandit. Avec <code>.bottom</code>, le bas du header reste exactement à sa place (juste au-dessus du premier <code>SongRow</code>) et toute la croissance se fait vers le haut — cohérent avec le fait que le header est ancré en haut de l'écran et que c'est la zone sous la barre de statut qui doit s'étendre. Avec <code>.center</code> ou <code>.top</code>, le bas du header se déplacerait aussi, et le premier <code>SongRow</code> sauterait visiblement à chaque geste de traction.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Ce qu'on laisse de côté pour l'instant</summary>
+    <p>Tes captures de référence montrent aussi une barre de navigation transparente au repos, qui devient opaque seulement une fois le header scrollé hors de vue — le même genre d'effet que Spotify ou Apple Music. C'est un mécanisme séparé (suivre la position de scroll avec <code>onScrollGeometryChange</code>, piloter <code>.toolbarBackground</code> en conséquence), pas un prolongement direct de l'effet extensible. Volontairement laissé pour une prochaine leçon plutôt que d'alourdir celle-ci.</p>
+  </details>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>Header fixe, liste dans son propre scroll séparé</td><td>Header et liste dans un seul contenu défilant</td></tr>
+    <tr><td>Header borné par la zone sûre, sous la barre de statut</td><td>Header étendu sous la barre de statut (<code>.ignoresSafeArea</code>)</td></tr>
+    <tr><td>Taille du header fixe en toute circonstance</td><td>Le header grandit pendant un overscroll en haut, comme les captures de référence</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://nilcoalescing.com/blog/StretchyHeaderInSwiftUI/">Stretchy header in SwiftUI with visualEffect()</a> (nilcoalescing.com) — la technique complète, avec l'explication détaillée de <code>visualEffect</code> et de l'espace de coordonnées <code>.scrollView</code>.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi <code>max(0, scrollOffset)</code> dans le calcul de <code>stretchy()</code> ?</p>
+    <label><input type="radio" name="q1" value="a"> Pour empêcher tout scroll négatif dans le ScrollView entier</label>
+    <label><input type="radio" name="q1" value="b"> Parce que scaleEffect refuse toute valeur négative en paramètre</label>
+    <label><input type="radio" name="q1" value="c"> Pour que l'effet ne se déclenche que pendant un overscroll en haut, jamais en scrollant normalement</label>
+    <label><input type="radio" name="q1" value="d"> Pour compenser le décalage introduit par .ignoresSafeArea(edges: .top)</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Pourquoi remplacer <code>List</code> par <code>ScrollView</code> + <code>VStack</code> dans <code>PlaylistDetailView</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> List ne supporte pas .ignoresSafeArea depuis iOS 17</label>
+    <label><input type="radio" name="q2" value="b"> ScrollView affiche les éléments plus rapidement que List sur une longue liste</label>
+    <label><input type="radio" name="q2" value="c"> List empêche techniquement l'utilisation de visualEffect sur ses lignes</label>
+    <label><input type="radio" name="q2" value="d"> Pour que le header et les chansons partagent un seul contenu défilant</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi <code>anchor: .bottom</code> sur le <code>scaleEffect</code> du header ?</p>
+    <label><input type="radio" name="q3" value="a"> Pour que le bas du header reste fixe et que la croissance se fasse vers le haut</label>
+    <label><input type="radio" name="q3" value="b"> C'est la seule valeur d'ancrage compatible avec visualEffect</label>
+    <label><input type="radio" name="q3" value="c"> Pour empêcher le titre du header de grandir en même temps que le dégradé</label>
+    <label><input type="radio" name="q3" value="d"> Pour aligner le header avec le bas de l'écran plutôt que le haut</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">4. Que reste-t-il volontairement à faire après cette leçon, pour se rapprocher encore des captures de référence ?</p>
+    <label><input type="radio" name="q4" value="a"> Remplacer @ScaledMetric par visualEffect sur le bouton play/pause</label>
+    <label><input type="radio" name="q4" value="b"> Une barre de navigation transparente qui devient opaque une fois le header scrollé</label>
+    <label><input type="radio" name="q4" value="c"> Ajouter .dynamicTypeSize au ZStack de PlaylistCoverHeader</label>
+    <label><input type="radio" name="q4" value="d"> Remettre List à la place de ScrollView pour de meilleures performances</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu veux tester l'effet inverse — un header qui se réduit et se fond dans la barre de navigation quand on scrolle vers le bas, plutôt que de simplement disparaître derrière elle ? Demande à ton agent comment adapter <code>stretchy()</code> pour couvrir aussi ce cas, ou si ça mérite un modificateur distinct.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0017-dynamic-type-audit-tailles-fixes.html">← Leçon 17 : l'audit des tailles fixes</a></span>
+    <span>Leçon suivante : barre de navigation transparente au scroll</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

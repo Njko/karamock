@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 17 — Dynamic Type : l'audit des tailles fixes</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 17 · Accessibilité (4/N)</p>
+  <h1>Dynamic Type : l'audit des autres tailles fixes</h1>
+  <p class="subtitle">La Leçon 16 a laissé une question ouverte : <code>PlaylistCard</code> (150×150), <code>SongRow</code> (50×50) et <code>PlaylistCoverHeader</code> (220 de hauteur) ont tous une taille fixe quelque part — est-ce un problème ? La Leçon 16 avait déjà montré avec <code>LyricsView</code> qu'une taille fixe n'est pas automatiquement un bug. Cette leçon termine l'audit, et une seule des trois vues a un vrai problème.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> le réflexe utile à transmettre à toute l'équipe n'est pas "chercher les tailles fixes et les éliminer" — c'est savoir distinguer une taille fixe inoffensive d'une taille fixe qui va silencieusement couper du texte à un réglage d'accessibilité élevé. C'est un jugement de revue de code, pas une règle automatique, et c'est justement ce qui le rend difficile à faire appliquer sans exemples concrets comme celui-ci.
+  </div>
+
+  <h2><code>SongRow</code> : rien à corriger</h2>
+  <pre><code>struct SongRow: View {
+    let song: Song
+
+    var body: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.quaternary)
+                .frame(width: 50, height: 50)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(song.title)
+                Text(song.artist)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+}</code></pre>
+  <p>Le rectangle 50×50 est une simple pochette factice — comme dans <code>MiniPlayerBar</code> (Leçon 15), une taille fixe pour un élément décoratif n'a pas besoin de suivre le texte. Le titre et l'artiste utilisent des styles par défaut/sémantiques (<code>.body</code> implicite, <code>.subheadline</code>), donc ils grossissent normalement. Et surtout : rien ici ne <strong>limite</strong> la hauteur de la rangée. Si le texte s'étale sur deux lignes à un réglage de texte plus grand, le <code>HStack</code> grandit avec lui — aucune information n'est perdue, la rangée devient juste un peu plus haute. Rien à corriger.</p>
+
+  <h2><code>PlaylistCard</code> : la vraie régression</h2>
+  <pre><code>struct PlaylistCard: View {
+    let playlist: Playlist
+
+    var body: some View {
+        LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            .frame(width: 150, height: 150)
+            .overlay(alignment: .bottomLeading) {
+                Text(playlist.title)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .padding(10)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}</code></pre>
+  <p>La différence critique avec <code>SongRow</code> : ce <code>.clipShape(RoundedRectangle(cornerRadius: 16))</code> à la fin. La carte entière — dégradé <strong>et</strong> superposition de texte — est découpée au gabarit fixe de 150×150. <code>.font(.headline)</code> grossit bien avec Dynamic Type, mais rien ne limite le texte à tenir dans la carte : à un réglage de texte élevé, le titre s'étale sur plus de lignes, dépasse les 150×150, et se fait <strong>couper net</strong> par le masque — sans les trois petits points d'une troncature classique, juste une coupe brutale au milieu d'un mot. C'est une vraie perte d'information, pas juste un défaut esthétique.</p>
+
+  <h2>La correction</h2>
+  <pre><code>struct PlaylistCard: View {
+    let playlist: Playlist
+
+    var body: some View {
+        LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            .frame(width: 150, height: 150)
+            .overlay(alignment: .bottomLeading) {
+                Text(playlist.title)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .padding(10)
+                    .lineLimit(2)
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .accessibilityShowsLargeContentViewer {
+                Text(playlist.title)
+            }
+    }
+}</code></pre>
+  <p>Trois ajustements, chacun avec un rôle précis :</p>
+  <ul>
+    <li><code>.lineLimit(2)</code> plafonne le nombre de lignes, quel que soit le réglage de texte — le titre ne peut plus s'étaler indéfiniment dans la carte.</li>
+    <li><code>.dynamicTypeSize(...DynamicTypeSize.accessibility1)</code> plafonne <strong>la taille de police</strong> à laquelle ce texte précis peut grossir — même à 2 lignes, un texte à la taille d'accessibilité maximale serait encore trop grand pour 150×150.</li>
+    <li><code>.accessibilityShowsLargeContentViewer { Text(playlist.title) }</code> rend au texte plafonné ce que les deux lignes précédentes lui ont retiré : un appui long sur la carte affiche le titre complet, en grand, dans une bulle temporaire — sans les limites de <code>.lineLimit</code> ni de <code>.dynamicTypeSize</code>.</li>
+  </ul>
+
+  <details class="aside">
+    <summary>Est-ce que ça contredit la Leçon 16 ?</summary>
+    <p>La Leçon 16 disait : laisse le bouton play/pause grossir avec le texte, ne le plafonne pas. Ici on plafonne délibérément. Pas de contradiction : le bouton de la Leçon 16 n'avait <strong>aucune</strong> contrainte d'espace autour de lui — le laisser grossir ne cassait rien. <code>PlaylistCard</code>, elle, doit tenir dans une grille de cartes de taille fixe (<code>PlaylistSection</code>) : la laisser grossir sans limite casserait la mise en page de toute la grille, pas juste cette carte. La documentation Apple sur <code>dynamicTypeSize</code> est explicite sur ce point : plafonner est acceptable pour des éléments déjà volumineux dans une mise en page contrainte, jamais comme solution de facilité pour éviter de gérer une mise en page qui devrait s'adapter. Et c'est précisément pour ne pas perdre l'information au passage qu'on ajoute <code>accessibilityShowsLargeContentViewer</code> juste après.</p>
+  </details>
+
+  <h2><code>PlaylistCoverHeader</code> : un problème différent, une solution différente</h2>
+  <pre><code>struct PlaylistCoverHeader: View {
+    let playlist: Playlist
+
+    var body: some View {
+        LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            .frame(height: 220)
+            .overlay {
+                Text(playlist.title)
+                    .font(.title2.bold())
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding()
+            }
+    }
+}</code></pre>
+  <p>Remarque ce qui manque ici par rapport à <code>PlaylistCard</code> : pas de <code>.clipShape</code>. Un <code>.overlay</code> ne redimensionne jamais la vue de base et n'est pas non plus automatiquement découpé à ses bords — sans masque, un titre trop long ne serait pas coupé, il déborderait simplement des 220pt et viendrait chevaucher visuellement ce qui suit dans le <code>ScrollView</code> (la liste des chansons). Ce n'est pas de la perte d'information comme <code>PlaylistCard</code>, mais un vrai chevauchement visuel — un problème différent, pas le même bug avec un habillage différent.</p>
+  <p>Et surtout, contrairement à <code>PlaylistCard</code>, rien ici n'oblige la bannière à rester à 220pt : c'est un élément unique en haut d'un écran qui défile, pas une carte dans une grille de cartes toutes identiques. Plafonner le texte comme pour <code>PlaylistCard</code> serait donc la mauvaise réponse ici — la bonne réponse est de laisser la bannière <strong>grandir</strong> pour accueillir le texte, plutôt que de contraindre le texte à tenir dans la bannière.</p>
+  <p>Le blocage technique : un <code>.overlay</code> ne fait jamais grandir sa vue de base, quelle que soit la taille de son contenu — la taille rapportée d'un <code>.overlay</code> est toujours celle de la vue principale seule. Un <code>ZStack</code>, lui, rapporte l'union (le maximum) des tailles de tous ses enfants. En remplaçant l'un par l'autre, et <code>.frame(height:)</code> par <code>.frame(minHeight:)</code>, le dégradé peut s'étirer pour couvrir toute la hauteur que le titre réclame :</p>
+  <pre><code>struct PlaylistCoverHeader: View {
+    let playlist: Playlist
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                .frame(minHeight: 220)
+
+            Text(playlist.title)
+                .font(.title2.bold())
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .padding()
+        }
+    }
+}</code></pre>
+  <p>À un réglage de texte par défaut, rien ne change visuellement : le dégradé fait toujours 220pt. À un réglage plus élevé, le <code>ZStack</code> grandit pour loger le titre en entier, et pousse le reste du contenu du <code>ScrollView</code> vers le bas en conséquence — aucune découpe, aucun chevauchement, et pas besoin de plafonner ni de restituer quoi que ce soit via le Large Content Viewer, puisque rien n'est jamais tronqué.</p>
+
+  <table class="compare-table">
+    <tr><th>Vue</th><th>Verdict</th></tr>
+    <tr><td><code>SongRow</code></td><td>Rien à corriger — la rangée grandit avec le texte, rien n'est masqué</td></tr>
+    <tr><td><code>PlaylistCard</code></td><td>Corrigé — <code>.clipShape</code> coupait le titre sans prévenir ; plafonné + Large Content Viewer</td></tr>
+    <tr><td><code>PlaylistCoverHeader</code></td><td>Corrigé — <code>.overlay</code> → <code>ZStack</code> + <code>.frame(minHeight:)</code>, la bannière grandit au lieu de couper le texte</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://useyourloaf.com/blog/restricting-dynamic-type-sizes/">Restricting Dynamic Type Sizes</a> (useyourloaf.com) — l'usage de <code>.dynamicTypeSize(...)</code> pour plafonner un élément à mise en page contrainte, avec l'avertissement explicite de ne jamais s'en servir pour contourner un vrai problème de mise en page. Pour le détail de l'API, <a href="https://developer.apple.com/documentation/swiftui/view/accessibilityshowslargecontentviewer()">accessibilityShowsLargeContentViewer()</a> sur la documentation Apple. Pour la différence de calcul de taille entre <code>ZStack</code> et <code>.overlay</code>, <a href="https://www.swiftuifieldguide.com/layout/zstack/">ZStack</a> et <a href="https://www.swiftuifieldguide.com/layout/overlay/">Overlay</a> sur SwiftUI Field Guide.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi <code>SongRow</code> ne nécessite-t-elle aucune correction, malgré son rectangle fixe 50×50 ?</p>
+    <label><input type="radio" name="q1" value="a"> Elle n'affiche aucun texte qui dépend de Dynamic Type</label>
+    <label><input type="radio" name="q1" value="b"> Rien ne limite la hauteur de la rangée : le texte peut grandir sans être coupé</label>
+    <label><input type="radio" name="q1" value="c"> SongRow utilise déjà @ScaledMetric sur toutes ses tailles</label>
+    <label><input type="radio" name="q1" value="d"> Le rectangle de 50×50 grossit automatiquement avec le texte voisin</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Quelle est la différence critique entre <code>PlaylistCard</code> (buguée) et <code>SongRow</code> (correcte) ?</p>
+    <label><input type="radio" name="q2" value="a"> PlaylistCard utilise un style de police non sémantique, contrairement à SongRow</label>
+    <label><input type="radio" name="q2" value="b"> SongRow est dans une List, ce qui active un comportement spécial</label>
+    <label><input type="radio" name="q2" value="c"> PlaylistCard n'a pas de Spacer alors que SongRow en a un</label>
+    <label><input type="radio" name="q2" value="d"> PlaylistCard applique un .clipShape qui découpe tout texte débordant</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">3. Pourquoi ajouter <code>.accessibilityShowsLargeContentViewer</code> après avoir plafonné <code>.dynamicTypeSize</code> sur le titre de <code>PlaylistCard</code> ?</p>
+    <label><input type="radio" name="q3" value="a"> C'est requis par Xcode dès qu'un lineLimit est posé sur un Text</label>
+    <label><input type="radio" name="q3" value="b"> Il désactive le plafond dynamicTypeSize uniquement pour VoiceOver</label>
+    <label><input type="radio" name="q3" value="c"> Il permet de retrouver le titre complet, en grand, via un appui long</label>
+    <label><input type="radio" name="q3" value="d"> Il agrandit automatiquement la carte au-delà de 150×150 si besoin</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">4. Pourquoi remplacer <code>.overlay</code> par un <code>ZStack</code> corrige-t-il <code>PlaylistCoverHeader</code>, plutôt que de plafonner le texte comme pour <code>PlaylistCard</code> ?</p>
+    <label><input type="radio" name="q4" value="a"> .overlay est déprécié depuis iOS 17 au profit de ZStack pour tout usage</label>
+    <label><input type="radio" name="q4" value="b"> ZStack applique automatiquement .dynamicTypeSize à ses enfants</label>
+    <label><input type="radio" name="q4" value="c"> Rien n'oblige la bannière à rester à 220pt, donc mieux vaut la laisser grandir</label>
+    <label><input type="radio" name="q4" value="d"> ZStack empêche tout débordement visuel par défaut, contrairement à overlay</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu as maintenant deux réponses différentes à un même symptôme (texte qui déborde d'un cadre fixe) : plafonner (PlaylistCard) ou laisser grandir (PlaylistCoverHeader). Demande à ton agent comment trancher entre les deux face à un nouveau cas — qu'est-ce qui, dans la mise en page environnante, dicte lequel choisir ?</p>
+
+  <div class="lesson-nav">
+    <span><a href="0016-dynamic-type-bouton-lecture.html">← Leçon 16 : Dynamic Type sur le bouton lecture</a></span>
+    <span><a href="0018-header-extensible.html">Leçon suivante : le header extensible →</a></span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
