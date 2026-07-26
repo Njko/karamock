@@ -34,6 +34,7 @@ struct MiniPlayerBar: View {
                     .font(.title3)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
         }
         .padding(10)
         .background(.regularMaterial)

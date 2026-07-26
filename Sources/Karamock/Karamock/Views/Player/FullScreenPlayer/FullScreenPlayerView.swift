@@ -27,6 +27,7 @@ struct FullScreenPlayerView: View {
                     .font(.title3)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Fermer")
             
             LyricsView(lyrics: mockLyrics, currentTime: progress)
                 .frame(height:160)
@@ -51,6 +52,7 @@ struct FullScreenPlayerView: View {
                 Button { } label: {
                     Image(systemName: "backward.fill").font(.title)
                 }
+                .accessibilityLabel("Piste précédente")
                 
                 Button {
                     player.isPlaying.toggle()
@@ -58,10 +60,12 @@ struct FullScreenPlayerView: View {
                     Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 64))
                 }
+                .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
                 
                 Button { } label: {
                     Image(systemName: "forward.fill").font(.title)
                 }
+                .accessibilityLabel("Piste suivante")
             }
             
             Spacer()
