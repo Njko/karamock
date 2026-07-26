@@ -15,6 +15,7 @@ struct FullScreenPlayerView: View {
     
     let song: Song
     
+    @ScaledMetric(relativeTo: .largeTitle) private var playButtonSize: CGFloat = 64
     @State private var progress: TimeInterval = 0
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
@@ -58,7 +59,7 @@ struct FullScreenPlayerView: View {
                     player.isPlaying.toggle()
                 } label: {
                     Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 64))
+                        .font(.system(size: playButtonSize))
                 }
                 .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
                 
