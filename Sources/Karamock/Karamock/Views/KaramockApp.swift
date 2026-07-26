@@ -10,14 +10,9 @@ import SwiftUI
 @main
 struct KaramockApp: App {
     
-    @State var player = PlayerState()
-    @State var downloadedSongsRepository = InMemoryDownloadedSongsRepository()
-    
     var body: some Scene {
         WindowGroup {
             RootTabView()
-                .environment(\.player, player)
-                .environment(\.downloadedSongsRepository, downloadedSongsRepository)
         }
     }
 }

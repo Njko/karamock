@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		61B4D54A2D5B4A4D9C06F2A1 /* FactoryKit in Frameworks */ = {isa = PBXBuildFile; productRef = 61B4D5492D5B4A4D9C06F2A1 /* FactoryKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		3E5EE097301013FD00BE5CA7 /* Karamock.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Karamock.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				61B4D54A2D5B4A4D9C06F2A1 /* FactoryKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = Karamock;
 			packageProductDependencies = (
+				61B4D5492D5B4A4D9C06F2A1 /* FactoryKit */,
 			);
 			productName = Karamock;
 			productReference = 3E5EE097301013FD00BE5CA7 /* Karamock.app */;
@@ -95,6 +101,7 @@
 			mainGroup = 3E5EE08E301013FD00BE5CA7;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				61B4D5482D5B4A4D9C06F2A1 /* XCRemoteSwiftPackageReference "Factory" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3E5EE098301013FD00BE5CA7 /* Products */;
@@ -334,6 +341,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		61B4D5482D5B4A4D9C06F2A1 /* XCRemoteSwiftPackageReference "Factory" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/hmlongco/Factory";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		61B4D5492D5B4A4D9C06F2A1 /* FactoryKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61B4D5482D5B4A4D9C06F2A1 /* XCRemoteSwiftPackageReference "Factory" */;
+			productName = FactoryKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 3E5EE08F301013FD00BE5CA7 /* Project object */;
 }

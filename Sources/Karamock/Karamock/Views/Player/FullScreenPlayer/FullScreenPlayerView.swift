@@ -5,11 +5,12 @@
 //  Created by A422GQ on 23/07/2026.
 //
 
+import FactoryKit
 import SwiftUI
 import Combine
 
 struct FullScreenPlayerView: View {
-    @Environment(\.player) private var player
+    @Injected(\.player) private var player
     @Environment(\.dismiss) private var dismiss
     
     let song: Song

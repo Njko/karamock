@@ -5,11 +5,12 @@
 //  Created by A422GQ on 23/07/2026.
 //
 
+import FactoryKit
 import SwiftUI
 
 struct MiniPlayerBar: View {
     
-    @Environment(\.player) var player
+    @Injected(\.player) private var player
     
     let song: Song
     
