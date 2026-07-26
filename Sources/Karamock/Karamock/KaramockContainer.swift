@@ -25,4 +25,14 @@ extension Container {
     var fetchDownloadedSongs: Factory<FetchDownloadedSongsUseCase> {
         self { FetchDownloadedSongsUseCase(repository: self.downloadedSongsRepository()) }
     }
+    
+    @MainActor
+    var libraryViewModel : Factory<LibraryViewModel> {
+        self { LibraryViewModel(fetchDownloadedSongs: self.fetchDownloadedSongs()) }
+    }
+    
+    @MainActor
+    var songDownloadViewModel: ParameterFactory<Song, SongDownloadViewModel> {
+        self { song in SongDownloadViewModel(song:song, downloadSong: self.downloadSong()) }
+    }
 }

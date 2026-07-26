@@ -9,14 +9,13 @@ import SwiftUI
 import FactoryKit
 
 struct LibraryView: View {
-    @Injected(\.fetchDownloadedSongs) private var fetchDownloadedSongs
-    @State private var viewModel: LibraryViewModel?
+    @InjectedObservable(\.libraryViewModel) private var viewModel
     @State private var selectedSong: Song?
     
     var body: some View {
         NavigationStack {
             Group {
-                if let viewModel, !viewModel.songs.isEmpty {
+                if !viewModel.songs.isEmpty {
                     List(viewModel.songs) { song in
                         Button {
                             selectedSong = song
@@ -37,13 +36,10 @@ struct LibraryView: View {
             .navigationTitle("Bibliothèque")
         }
         .task {
-            if viewModel == nil {
-                viewModel = LibraryViewModel(fetchDownloadedSongs: fetchDownloadedSongs)
-            }
-            await viewModel?.refresh()
+            await viewModel.refresh()
         }
         .refreshable {
-            await viewModel?.refresh()
+            await viewModel.refresh()
         }
         .sheet(item: $selectedSong) { song in
             SongOptionsSheet(song: song)

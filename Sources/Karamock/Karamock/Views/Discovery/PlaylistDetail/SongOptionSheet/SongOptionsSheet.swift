@@ -11,7 +11,6 @@ import FactoryKit
 struct SongOptionsSheet: View {
     @Injected(\.player) private var player
     @Environment(\.dismiss) private var dismiss
-    @Injected(\.downloadSong) private var downloadSong
     
     let song: Song
     
@@ -85,7 +84,7 @@ struct SongOptionsSheet: View {
         }
         .task {
             if downloadViewModel == nil {
-                downloadViewModel = SongDownloadViewModel(song: song, downloadSong: downloadSong)
+                downloadViewModel = Container.shared.songDownloadViewModel(song)
             }
         }
     }
