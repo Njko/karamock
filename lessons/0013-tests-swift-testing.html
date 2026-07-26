@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 13 — Tests avec Swift Testing</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 13 · Tests (1/N)</p>
+  <h1>Tester <code>LibraryViewModel</code> avec Swift Testing</h1>
+  <p class="subtitle">Six leçons (6 à 12) ont découplé les Vues des UseCases, des Repositories et maintenant des ViewModels eux-mêmes, via <code>Container</code>. Le bénéfice concret arrive ici : <code>LibraryViewModel</code> peut être testé sans lancer l'app, sans simulateur, en remplaçant juste ce qu'il faut dans le graphe de dépendances.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> l'architecture en couches n'a de valeur que si elle rend le code plus facile à vérifier, pas seulement plus joli à lire. Cette leçon en fait la preuve : un seul test, une dizaine de lignes, aucune dépendance à un vrai Repository ou à SwiftUI pour valider que <code>LibraryViewModel.refresh()</code> fait ce qu'on attend de lui.
+  </div>
+
+  <h2>Créer la cible de tests</h2>
+  <p>Dans Xcode : <em>File → New → Target…</em>, choisis <em>Unit Testing Bundle</em>, nomme-la <code>KaramockTests</code>. Depuis Xcode 16, <strong>Swift Testing</strong> est le framework sélectionné par défaut pour une nouvelle cible de tests (l'ancien XCTest reste disponible si besoin, mais on utilise Swift Testing ici).</p>
+  <p>Ajoute ensuite <code>FactoryTesting</code> aux dépendances de la cible <code>KaramockTests</code> (<em>Project → KaramockTests → General → Frameworks and Libraries</em>). Un point important, documenté par Factory lui-même : <strong>n'ajoute pas <code>FactoryKit</code> une seconde fois</strong> à la cible de tests — seul <code>FactoryTesting</code> y va, <code>FactoryKit</code> vient déjà avec la cible <code>Karamock</code> importée via <code>@testable import Karamock</code>. L'ajouter deux fois peut créer des fabriques dupliquées et un comportement indéterminé.</p>
+
+  <h2>Un Repository factice pour les tests</h2>
+  <p><code>DownloadedSongsRepository</code> est un protocole — exactement ce qu'il faut pour lui substituer une implémentation de test, sur le même principe que <code>MockSongDownloading</code> (Leçon 6). Comme <code>InMemoryDownloadedSongsRepository</code> en production, on garde un <code>actor</code> : c'est un état partagé, potentiellement lu et modifié depuis plusieurs tests exécutés en parallèle (voir plus bas) — le raisonnement de la Leçon 9 sur struct/class/actor s'applique à l'identique ici.</p>
+  <pre><code>@testable import Karamock
+
+actor MockDownloadedSongsRepository: DownloadedSongsRepository {
+    private var storage: [Song]
+
+    init(songs: [Song] = []) {
+        self.storage = songs
+    }
+
+    func songs() async -> [Song] {
+        storage
+    }
+
+    func add(_ song: Song) async {
+        storage.append(song)
+    }
+}</code></pre>
+  <p>Ce fichier vit dans la cible de tests, pas dans <code>Karamock</code> — un mock n'a rien à faire dans le code livré à l'utilisateur. <code>@testable import Karamock</code> est ce qui donne accès à <code>Song</code> et <code>DownloadedSongsRepository</code>, deux types <code>internal</code> du module <code>Karamock</code>, sans avoir à faire vivre ce fichier dans ce module.</p>
+
+  <details class="aside">
+    <summary>Piège Xcode : un fichier de test qui finit dans l'app livrée</summary>
+    <p>Sans cet import, Xcode propose une solution qui compile aussi : ajouter <code>MockDownloadedSongsRepository.swift</code> à l'appartenance de cible (<em>Target Membership</em>) de <code>Karamock</code> en plus de <code>KaramockTests</code>. Ça compile, parce que le fichier fait alors littéralement partie du même module que <code>Song</code> — mais ça veut dire que ce mock se retrouve dans le binaire de l'app livrée à l'utilisateur, alors qu'il n'a de sens que pour les tests. Le bon réflexe : <code>@testable import Karamock</code> depuis la cible de tests, jamais une double appartenance de cible. Dans l'inspecteur de fichier Xcode, seule la case <code>KaramockTests</code> doit être cochée.</p>
+  </details>
+
+  <h2>Le test</h2>
+  <p>Le README de Factory le dit explicitement : <em>"the mocking concept can also be used when writing unit tests"</em> — remplacer une fabrique juste pour un test suit exactement le même mécanisme que pour un Preview (Leçon 11).</p>
+  <pre><code>import Testing
+import FactoryKit
+import FactoryTesting
+@testable import Karamock
+
+@Suite(.container) // conteneur isolé, un par test
+struct LibraryViewModelTests {
+
+    @Test
+    @MainActor
+    func refreshLoadsDownloadedSongs() async {
+        let song = Song(title: "Year of the Cat", artist: "Cat Stevens", year: 1976, duration: "6:38", key: "Bm")
+        Container.shared.fetchDownloadedSongs {
+            FetchDownloadedSongsUseCase(repository: MockDownloadedSongsRepository(songs: [song]))
+        }
+
+        let viewModel = Container.shared.libraryViewModel()
+        await viewModel.refresh()
+
+        #expect(viewModel.songs == [song])
+    }
+
+    @Test
+    @MainActor
+    func refreshWithNoDownloadedSongsLeavesLibraryEmpty() async {
+        Container.shared.fetchDownloadedSongs {
+            FetchDownloadedSongsUseCase(repository: MockDownloadedSongsRepository())
+        }
+
+        let viewModel = Container.shared.libraryViewModel()
+        await viewModel.refresh()
+
+        #expect(viewModel.songs.isEmpty)
+    }
+}</code></pre>
+  <p>Deux ajustements par rapport à une intuition SwiftUI classique. D'abord, <code>import FactoryKit</code> est nécessaire en plus de <code>FactoryTesting</code> : ce dernier fournit le trait <code>.container</code>, mais <code>Container</code> et <code>Factory</code> eux-mêmes viennent de <code>FactoryKit</code>. Ensuite, chaque <code>@Test</code> porte <code>@MainActor</code> : <code>libraryViewModel</code> est une fabrique <code>@MainActor</code> dans <code>KaramockContainer</code> (Leçon 12), parce que <code>LibraryViewModel</code> l'est aussi — un test qui la résout doit donc lui-même être isolé sur le <code>MainActor</code>, sous peine d'erreur de compilation Swift 6. C'est la même règle de cohérence d'isolation qu'en Leçon 12, appliquée cette fois au code de test plutôt qu'à une Vue.</p>
+  <p>Aucun des deux tests ne construit <code>LibraryViewModel</code> à la main : chacun redéfinit <code>fetchDownloadedSongs</code> dans le <code>Container</code>, puis résout <code>libraryViewModel</code> — Factory assemble le reste (<code>LibraryViewModel(fetchDownloadedSongs:)</code>) exactement comme il le ferait dans l'app. C'est la même déclaration que dans <code>KaramockContainer</code>, juste avec la fabrique <code>fetchDownloadedSongs</code> temporairement remplacée pour ce test précis.</p>
+
+  <details class="aside">
+    <summary>Pourquoi <code>@Suite(.container)</code> plutôt que rien du tout</summary>
+    <p><code>Container.shared</code> est partagé par défaut — sans <code>.container</code>, les deux tests ci-dessus se disputeraient la <em>même</em> instance de <code>Container</code>, et Swift Testing exécute les tests en parallèle par défaut. Le résultat serait indéterministe : selon l'ordre d'exécution, un test pourrait lire la fabrique <code>fetchDownloadedSongs</code> enregistrée par l'autre. <code>.container</code>, fourni par <code>FactoryTesting</code>, donne une instance de <code>Container</code> fraîche et isolée à chaque test — c'est ce qui permet de garder les tests parallèles plutôt que de les forcer en série.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Piège : <code>Song</code> et l'égalité par <code>id</code></summary>
+    <p>Une façon a priori tout aussi naturelle d'écrire l'assertion aurait été de reconstruire un <code>Song</code> identique directement dans le <code>#expect</code>, plutôt que de réutiliser la variable <code>song</code> déclarée plus haut :</p>
+    <pre><code>#expect(viewModel.songs == [
+    Song(title: "Year of the Cat", artist: "Cat Stevens", year: 1976, duration: "6:38", key: "Bm")
+])</code></pre>
+    <p>Ce test échouerait à tous les coups, pour une mauvaise raison. <code>Song</code> génère un <code>UUID()</code> aléatoire à chaque construction (Leçon 1), et le <code>Hashable</code> synthétisé compare aussi <code>id</code>. Deux <code>Song</code> construits séparément avec des champs identiques ne sont donc jamais égaux — même titre, même artiste, mais deux <code>id</code> différents. C'est précisément pour éviter ce piège que le test déclare <code>song</code> une seule fois et le réutilise des deux côtés : <code>MockDownloadedSongsRepository(songs: [song])</code> pour peupler le mock, puis <code>#expect(viewModel.songs == [song])</code> pour l'assertion — la même instance, jamais reconstruite.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Pourquoi ne pas plutôt réutiliser <code>mockPlaylist</code> ?</summary>
+    <p>Le projet a déjà des données factices toutes prêtes : <code>mockPlaylist</code>, la constante définie dans <code>Playlist.swift</code> et utilisée par <code>DiscoveryView</code>. Il aurait été tentant d'écrire <code>MockDownloadedSongsRepository(songs: [mockPlaylist[0].songs[0]])</code> plutôt que de construire un <code>Song</code> de toutes pièces dans le test.</p>
+    <p>C'est exactement ce que Gerard Meszaros appelle un <a href="https://test-smell-catalog.readthedocs.io/en/latest/Dependencies/External%20dependencies/Mystery%20Guest.html"><em>Mystery Guest</em></a> dans <em>xUnit Test Patterns</em> : un test qui dépend d'une donnée définie ailleurs, hors de sa propre portée. Le lecteur du test ne voit plus le lien de cause à effet entre la donnée et l'assertion — il doit aller lire <code>Playlist.swift</code> pour comprendre ce qui est vérifié. Pire : si quelqu'un modifie <code>mockPlaylist</code> plus tard pour une raison qui n'a rien à voir avec ce test (changer un titre affiché dans <code>DiscoveryView</code>, par exemple), le test peut se mettre à échouer — ou pire, à passer pour de mauvaises raisons — sans qu'aucune ligne du test elle-même n'ait changé.</p>
+    <p>L'alternative que Meszaros recommande s'appelle une <em>Fresh Fixture</em> : <em>"each test method creates a test fixture for its own private use"</em>. C'est exactement ce que fait <code>let song = Song(title: "Year of the Cat", …)</code> dans ce test — une valeur locale, jetable, qui ne doit rien à personne d'autre dans le projet. Une donnée de production qui change ne doit jamais casser un test sans rapport ; une donnée de test qui change ne doit jamais casser autre chose que ce test.</p>
+  </details>
+
+  <table class="compare-table">
+    <tr><th>Sans Factory</th><th>Avec Factory + Swift Testing</th></tr>
+    <tr><td>Construire <code>LibraryViewModel</code> à la main avec un mock passé en paramètre</td><td>Remplacer une fabrique dans <code>Container</code>, laisser Factory assembler</td></tr>
+    <tr><td>Risque de désynchronisation si la signature du ViewModel change</td><td>Le test suit automatiquement la même construction que l'app</td></tr>
+    <tr><td>Tests parallèles risqués sans état global partagé maîtrisé</td><td><code>.container</code> isole chaque test, parallélisme sûr par défaut</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://github.com/hmlongco/Factory#testing">Section "Testing" du README Factory</a> et <a href="https://github.com/hmlongco/Factory/blob/main/Sources/FactoryTesting/ContainerTrait.swift">ContainerTrait.swift</a> pour le détail d'implémentation de <code>.container</code>. Pour Swift Testing lui-même, la <a href="https://developer.apple.com/documentation/testing">documentation officielle Apple</a>. Pour le <em>Mystery Guest</em> et la <em>Fresh Fixture</em>, <a href="https://test-smell-catalog.readthedocs.io/en/latest/Dependencies/External%20dependencies/Mystery%20Guest.html">xUnit Test Patterns</a> de Gerard Meszaros.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi les deux tests remplacent-ils <code>fetchDownloadedSongs</code> plutôt que de construire <code>LibraryViewModel</code> directement avec un mock ?</p>
+    <label><input type="radio" name="q1" value="a"> Construire LibraryViewModel directement est interdit par Factory en dehors de Container</label>
+    <label><input type="radio" name="q1" value="b"> Le compilateur exige que tout type @Observable passe par une fabrique</label>
+    <label><input type="radio" name="q1" value="c"> Le test suit ainsi la même construction que celle utilisée en production</label>
+    <label><input type="radio" name="q1" value="d"> LibraryViewModel n'a plus d'initialiseur public depuis la Leçon 12</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">2. Que se passerait-il si les deux tests tournaient en parallèle sans <code>@Suite(.container)</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> Ils partageraient le même Container.shared, résultat potentiellement indéterministe</label>
+    <label><input type="radio" name="q2" value="b"> Swift Testing les exécuterait automatiquement en série pour éviter tout conflit</label>
+    <label><input type="radio" name="q2" value="c"> La compilation échouerait faute de conteneur explicitement déclaré</label>
+    <label><input type="radio" name="q2" value="d"> Rien, Container.shared est isolé par test depuis Factory 2.0</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi <code>MockDownloadedSongsRepository</code> est-il déclaré comme <code>actor</code> plutôt que <code>struct</code> ?</p>
+    <label><input type="radio" name="q3" value="a"> DownloadedSongsRepository exige explicitement une conformance à actor</label>
+    <label><input type="radio" name="q3" value="b"> Les mocks doivent toujours être des reference types en Swift Testing</label>
+    <label><input type="radio" name="q3" value="c"> Un actor est nécessaire pour utiliser #expect de façon asynchrone</label>
+    <label><input type="radio" name="q3" value="d"> Son état (storage) est potentiellement partagé entre tests exécutés en parallèle</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">4. Pourquoi le test réutilise-t-il la même variable <code>song</code> pour peupler le mock et pour l'assertion, plutôt que de construire un second <code>Song</code> identique ?</p>
+    <label><input type="radio" name="q4" value="a"> Song n'a pas d'initialiseur memberwise, un seul Song peut exister par test</label>
+    <label><input type="radio" name="q4" value="b"> Deux Song construits séparément ont des id différents, donc ne sont jamais égaux</label>
+    <label><input type="radio" name="q4" value="c"> #expect refuse de comparer deux instances distinctes du même type Hashable</label>
+    <label><input type="radio" name="q4" value="d"> Réutiliser la variable améliore les performances d'exécution du test</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu veux écrire le même type de test pour <code>SongDownloadViewModel</code>, qui a une signature paramétrée (<code>ParameterFactory</code>) plutôt qu'une <code>Factory</code> simple ? Demande à ton agent comment adapter ce test à <code>Container.shared.songDownloadViewModel(song)</code>.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0012-viewmodels-dans-le-container.html">← Leçon 12 : ViewModels dans le Container</a></span>
+    <span>Leçon suivante : Accessibilité (VoiceOver, Dynamic Type)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
