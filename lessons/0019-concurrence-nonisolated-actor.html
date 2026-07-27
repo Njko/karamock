@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 19 — nonisolated, actor, et l'isolation par défaut</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 19 · Concurrence (1/N)</p>
+  <h1>Un correctif Swift 6 : nonisolated, actor, et l'isolation par défaut</h1>
+  <p class="subtitle">Avant de commencer la Leçon 18 sur ton Mac, tu as ajusté ton projet pour respecter proprement le mode de concurrence stricte de Swift 6. Le dépôt des chansons téléchargées était déjà un <code>actor</code> depuis les leçons précédentes — ce n'est pas lui qui a changé de nature. Le vrai sujet : un protocole et deux <code>init</code> qui avaient besoin d'un mot-clé qu'ils n'avaient pas encore, et un <code>@MainActor</code> ajouté par clarté sur un type qui l'était déjà implicitement. En cours de route, une tentative explorée pour faire compiler le tout — remplacer temporairement l'acteur par une classe protégée par une échappatoire non sûre — illustre bien le réflexe à éviter.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> ce n'est pas une leçon planifiée à l'avance — comme les leçons d'accessibilité, elle existe parce que tu as toi-même repéré et corrigé un vrai problème dans ton projet. Un poste Swift/Apple Platforms senior suppose de savoir lire un diagnostic de concurrence Swift 6 et comprendre <em>pourquoi</em> un correctif marche, pas seulement copier la solution qui fait taire le compilateur.
+  </div>
+
+  <h2>Le réglage qui change tout : l'isolation par défaut du module</h2>
+  <p>Le projet Karamock a deux réglages de build actifs (visibles dans <code>project.pbxproj</code>) :</p>
+  <pre><code>SWIFT_APPROACHABLE_CONCURRENCY = YES;
+SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;</code></pre>
+  <p>Ce deuxième réglage correspond à la proposition d'évolution <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0466-control-default-actor-isolation.md">SE-0466</a> : sans lui, une déclaration Swift est <strong>non isolée par défaut</strong>, et on ajoute <code>@MainActor</code> à la main partout où c'est nécessaire (exactement ce que faisait <code>KaramockContainer.swift</code> jusqu'à présent, avec un <code>@MainActor</code> explicite sur <code>libraryViewModel</code> et <code>songDownloadViewModel</code>). Avec ce réglage activé, c'est l'inverse : <strong>toute déclaration non annotée devient implicitement <code>@MainActor</code></strong>, et c'est <code>nonisolated</code> qui permet d'en sortir explicitement. L'exemple de la proposition elle-même, compilé avec cette option :</p>
+  <pre><code>func f() { }              // implicitement @MainActor
+
+nonisolated func g() { }   // explicitement non isolée
+
+class C {
+    init() { }             // implicitement @MainActor
+    static var value = 10  // implicitement @MainActor
+}</code></pre>
+  <p>C'est un mode pensé pour les apps à dominante UI, où la plupart du code tourne de toute façon sur le thread principal — Xcode 26 l'active par défaut pour tout nouveau projet.</p>
+
+  <h2>Une tentation explorée, puis écartée : l'échappatoire non sûre</h2>
+  <p>En cherchant à faire compiler les changements de cette leçon, tu es passé un temps par une version différente du dépôt — pas celle avec laquelle tu étais parti, et pas celle que tu as gardée :</p>
+  <pre><code>final class SimpleDownloadedSongsRepository: DownloadedSongsRepository {
+    nonisolated(unsafe) private var storage: [Song] = []
+
+    func songs() async -> [Song] { storage }
+    func add(_ song: Song) async {
+        guard !storage.contains(song) else { return }
+        storage.append(song)
+    }
+}</code></pre>
+  <p><code>nonisolated(unsafe)</code> est une échappatoire : elle dit au compilateur "arrête de vérifier les accès concurrents à cette propriété, je te promets que c'est sûr" — sans qu'aucun mécanisme ne garantisse réellement cette promesse. Rien n'empêcherait deux appels concurrents à <code>add(_:)</code> de modifier <code>storage</code> en même temps. Ce n'était pas la bonne piste, et tu ne l'as pas gardée : le dépôt est resté un <code>actor</code>, exactement comme dans les leçons précédentes :</p>
+  <pre><code>actor SimpleDownloadedSongsRepository: DownloadedSongsRepository {
+    private var storage: [Song] = []
+
+    init() {}
+
+    func songs() async -> [Song] { storage }
+    func add(_ song: Song) async {
+        guard !storage.contains(song) else { return }
+        storage.append(song)
+    }
+}</code></pre>
+  <p>Un <code>actor</code> garantit qu'un seul accès à <code>storage</code> s'exécute à la fois, appliqué par le compilateur — pas une promesse manuelle, une vraie exclusion mutuelle. C'est exactement le rôle que <code>MockDownloadedSongsRepository</code> joue déjà côté tests depuis la Leçon 13 : le vrai dépôt suit la même discipline que son double de test, et n'a jamais eu besoin d'en changer.</p>
+
+  <details class="aside">
+    <summary><code>nonisolated(unsafe)</code> n'est pas toujours une erreur</summary>
+    <p>Ce n'est pas un anti-pattern en soi : c'est une échappatoire de migration légitime quand on sait, par construction du code, qu'une propriété n'est en réalité accédée que depuis un seul contexte à la fois, sans vouloir l'encoder dans le type. Le réflexe à éviter, c'est de s'en servir pour faire taire une erreur de compilation sans avoir compris sa cause réelle — ce qui était tentant ici, puisque l'erreur venait en fait du protocole et des <code>init</code>, pas du dépôt lui-même.</p>
+  </details>
+
+  <h2>Pourquoi le protocole et les init ont besoin de <code>nonisolated</code></h2>
+  <p><code>DownloadedSongsRepository</code> et les deux UseCase qui l'utilisent ont aussi changé :</p>
+  <pre><code>nonisolated protocol DownloadedSongsRepository: Sendable {
+    func songs() async -> [Song]
+    func add(_ song: Song) async
+}
+
+struct DownloadSongUseCase: Sendable {
+    nonisolated init(service: SongDownloading, repository: DownloadedSongsRepository) { … }
+}
+
+struct FetchDownloadedSongsUseCase: Sendable {
+    nonisolated init(repository: DownloadedSongsRepository) { … }
+}</code></pre>
+  <p>Ces trois types sont <code>Sendable</code> : par construction, un type <code>Sendable</code> est conçu pour être partagé en sécurité entre acteurs différents — c'est tout l'intérêt du protocole <code>Sendable</code>. Mais sous isolation par défaut MainActor, un protocole ou un <code>init</code> non annoté devient implicitement <code>@MainActor</code>, ce qui les enfermerait sur un seul acteur et contredirait leur propre nature <code>Sendable</code>. <code>nonisolated</code> lève cette contradiction : ces déclarations restent utilisables depuis n'importe quel contexte, y compris depuis l'intérieur de l'acteur <code>SimpleDownloadedSongsRepository</code> lui-même.</p>
+
+  <p>Conséquence directe visible dans <code>KaramockContainer.swift</code> : les Factory <code>downloadSong</code> et <code>fetchDownloadedSongs</code> portaient un <code>@MainActor</code> explicite avant la correction — nécessaire tant que les <code>init</code> qu'elles appellent étaient implicitement MainActor. Une fois ces <code>init</code> rendus <code>nonisolated</code>, ce <code>@MainActor</code> devient inutile et a été retiré : les deux Factory redeviennent utilisables depuis n'importe quel contexte d'isolation, cohérent avec le fait qu'elles ne construisent que des structs <code>Sendable</code>.</p>
+
+  <details class="aside">
+    <summary>Et <code>PlayerState</code>, pourquoi ajouter <code>@MainActor</code> alors qu'il l'était déjà implicitement ?</summary>
+    <p><code>PlayerState</code> est un <code>@Observable final class</code> qui porte l'état de lecture affiché à l'écran — il n'a de sens que sur le fil principal, et le sera de toute façon tant que le réglage de build actuel reste actif. Le rendre <code>@MainActor</code> explicite documente cette contrainte dans le type lui-même plutôt que de la laisser dépendre silencieusement d'un réglage de projet invisible en lisant le fichier seul — utile si ce fichier est un jour partagé dans un module avec un réglage d'isolation différent.</p>
+  </details>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>Piste explorée puis écartée : classe + <code>nonisolated(unsafe)</code> sur <code>storage</code></td><td>Gardé : <code>actor</code>, comme dans les leçons précédentes — exclusion mutuelle garantie</td></tr>
+    <tr><td>Protocole et <code>init</code> implicitement MainActor, en contradiction avec <code>Sendable</code></td><td><code>nonisolated</code> explicite, cohérent avec des types pensés pour circuler entre acteurs</td></tr>
+    <tr><td><code>@MainActor</code> nécessaire sur les Factory pour compenser les <code>init</code> MainActor</td><td><code>@MainActor</code> retiré des Factory, plus nécessaire</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Sources primaires recommandées</div>
+    <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0466-control-default-actor-isolation.md">SE-0466 — Control Default Actor Isolation Inference</a> (swift-evolution) — la proposition qui définit <code>SWIFT_DEFAULT_ACTOR_ISOLATION</code> et le rôle de <code>nonisolated</code> pour s'en extraire.<br>
+    <a href="https://forums.swift.org/t/default-actor-isolation-mainactor-conflicts-with-sendable/87819">Default Actor Isolation - MainActor conflicts with Sendable</a> (forums.swift.org) — discussion exacte du conflit entre isolation par défaut et types <code>Sendable</code>, à l'origine du correctif de cette leçon.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Que fait concrètement <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code>, activé dans ce projet ?</p>
+    <label><input type="radio" name="q1" value="a"> Force toutes les tâches asynchrones à s'exécuter sur un thread d'arrière-plan dédié</label>
+    <label><input type="radio" name="q1" value="b"> Interdit totalement l'utilisation du mot-clé actor dans l'ensemble du module</label>
+    <label><input type="radio" name="q1" value="c"> Applique implicitement l'isolation MainActor à toute déclaration non annotée du module</label>
+    <label><input type="radio" name="q1" value="d"> Désactive complètement la vérification des data races pour tout le projet</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">2. Pourquoi remplacer temporairement l'acteur par une classe + <code>nonisolated(unsafe)</code> sur <code>storage</code> n'aurait pas été une bonne solution ?</p>
+    <label><input type="radio" name="q2" value="a"> Il désactive la vérification du compilateur sans garantir réellement une exécution synchronisée des accès</label>
+    <label><input type="radio" name="q2" value="b"> Il ralentit fortement l'application car chaque accès à storage passe par une file supplémentaire</label>
+    <label><input type="radio" name="q2" value="c"> Il empêche complètement toute compilation du projet tant que Swift 6 est activé</label>
+    <label><input type="radio" name="q2" value="d"> Il oblige à dupliquer la propriété storage dans chaque appelant du repository</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi ajouter <code>nonisolated</code> sur le protocole <code>DownloadedSongsRepository</code> et sur les init des deux UseCase ?</p>
+    <label><input type="radio" name="q3" value="a"> Pour empêcher tout type d'adopter ce protocole en dehors du MainActor</label>
+    <label><input type="radio" name="q3" value="b"> Pour transformer automatiquement ces structs en véritables acteurs à la compilation</label>
+    <label><input type="radio" name="q3" value="c"> Pour que Factory désactive la vérification de Sendable sur ces deux types</label>
+    <label><input type="radio" name="q3" value="d"> Pour qu'ils restent utilisables hors MainActor, cohérent avec leur nature Sendable</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">4. Pourquoi <code>@MainActor</code> a-t-il pu être retiré de <code>downloadSong</code> et <code>fetchDownloadedSongs</code> dans <code>KaramockContainer</code> après cette correction ?</p>
+    <label><input type="radio" name="q4" value="a"> Parce que Factory ignore désormais totalement l'isolation des acteurs dans ses déclarations</label>
+    <label><input type="radio" name="q4" value="b"> Parce que les init désormais nonisolated n'imposent plus MainActor comme avant</label>
+    <label><input type="radio" name="q4" value="c"> Parce que ces deux Factory ont été supprimées et remplacées par des singletons</label>
+    <label><input type="radio" name="q4" value="d"> Parce que DownloadSongUseCase n'est plus utilisé par aucune vue de l'application</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu veux comprendre pourquoi <code>libraryViewModel</code> et <code>songDownloadViewModel</code>, eux, ont gardé leur <code>@MainActor</code> explicite dans <code>KaramockContainer</code> alors que <code>downloadSong</code>/<code>fetchDownloadedSongs</code> l'ont perdu ? Demande à ton agent d'expliquer la différence entre un ViewModel et un UseCase de ce point de vue.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0018-header-extensible.html">← Leçon 18 : le header extensible</a></span>
+    <span>Leçon suivante : à définir</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
