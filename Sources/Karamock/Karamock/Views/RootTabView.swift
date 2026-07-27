@@ -35,14 +35,5 @@ struct RootTabView: View {
                 FullScreenPlayerView(song: song)
             }
         }
-        .onAppear {
-            Task {
-                try await Task.sleep(for: .seconds(4))
-                withAnimation {
-                    player.currentSong = .init(title: "hello wol", artist: "artis", year: 2999, duration: "3:35", key: "C")
-                    player.isPlaying.toggle()
-                }
-            }
-        }
     }
 }
