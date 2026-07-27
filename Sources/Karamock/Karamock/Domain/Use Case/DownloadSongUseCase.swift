@@ -9,7 +9,7 @@ struct DownloadSongUseCase: Sendable {
     let service: SongDownloading
     let repository: DownloadedSongsRepository
     
-    init(
+    nonisolated init(
         service: SongDownloading,
         repository: DownloadedSongsRepository
     ) {

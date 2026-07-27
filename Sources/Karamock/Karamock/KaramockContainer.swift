@@ -18,13 +18,11 @@ extension Container {
         self { SimpleDownloadedSongsRepository() }
             .singleton
     }
-    
-    @MainActor
+
     var downloadSong: Factory<DownloadSongUseCase> {
         self { DownloadSongUseCase(service: MockSongDownloading(), repository: self.downloadedSongsRepository()) }
     }
     
-    @MainActor
     var fetchDownloadedSongs: Factory<FetchDownloadedSongsUseCase> {
         self { FetchDownloadedSongsUseCase(repository: self.downloadedSongsRepository()) }
     }

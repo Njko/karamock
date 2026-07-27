@@ -8,7 +8,7 @@
 struct FetchDownloadedSongsUseCase: Sendable {
     let repository: DownloadedSongsRepository
     
-    init(repository: DownloadedSongsRepository) {
+    nonisolated init(repository: DownloadedSongsRepository) {
         self.repository = repository
     }
     

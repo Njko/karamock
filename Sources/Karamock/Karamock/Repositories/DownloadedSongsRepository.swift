@@ -7,17 +7,20 @@
 
 import Foundation
 
-protocol DownloadedSongsRepository : Sendable {
+nonisolated protocol DownloadedSongsRepository : Sendable {
     func songs() async -> [Song]
     func add(_ song: Song) async
 }
 
-final class SimpleDownloadedSongsRepository: DownloadedSongsRepository {
-    nonisolated(unsafe) private var storage: [Song] = []
+ 
+actor SimpleDownloadedSongsRepository: DownloadedSongsRepository {
+     private var storage: [Song] = []
     
     func songs() async -> [Song] {
         storage
     }
+    
+    init() {}
     
     func add(_ song: Song) async {
         guard !storage.contains(song) else { return }
