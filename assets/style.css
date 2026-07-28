@@ -117,6 +117,19 @@ pre code{ background: none; padding: 0; }
 }
 .mission-tie strong{ color: var(--accent); }
 
+/* Concrete on-device verification scenario */
+.verify-scenario{
+  background: var(--paper);
+  border: 1px solid var(--good);
+  border-left: 3px solid var(--good);
+  border-radius: 4px;
+  padding: 0.9rem 1.2rem 0.9rem 1rem;
+  margin: 0 0 1.6rem 0;
+  font-size: 0.95rem;
+}
+.verify-scenario strong{ color: var(--good); }
+.verify-scenario ol{ margin-bottom: 0; }
+
 /* Comparison table (UIKit <-> SwiftUI etc.) */
 .compare-table{
   width: 100%;

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 21 — Le mini-lecteur compact</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 21 · Interface (3/N)</p>
+  <h1>Le mini-lecteur compact, quand la barre d'onglets se réduit</h1>
+  <p class="subtitle">La Leçon 20 a corrigé la position, la visibilité et le fond de <code>MiniPlayerBar</code>. Une question restait ouverte en aside : que se passe-t-il quand la barre d'onglets se réduit pendant le scroll ? L'accessoire se compresse avec elle — et le contenu actuel de <code>MiniPlayerBar</code> (pochette + titre + artiste + bouton) n'a pas été pensé pour tenir dans cet espace réduit.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> c'est la suite directe de ce que tu as identifié toi-même à la fin de la Leçon 20 — un vrai comportement d'iOS 26 à anticiper, pas un cas limite théorique. Les captures de référence KaraFun montrent un mini-lecteur qui reste lisible en toute circonstance ; s'assurer qu'il ne casse pas visuellement dès que l'utilisateur scrolle fait partie de la fidélité à l'original que la mission demande.
+  </div>
+
+  <h2>Ce qui déclenche le changement d'état</h2>
+  <p>Le passage d'un accessoire "étendu" (au-dessus de la barre d'onglets) à "en ligne" (fondu dans la barre d'onglets réduite) est piloté par <code>.tabBarMinimizeBehavior</code>, un modificateur qu'on peut poser sur le <code>TabView</code> :</p>
+  <pre><code>.tabBarMinimizeBehavior(.automatic)  // valeur par défaut
+.tabBarMinimizeBehavior(.never)      // la barre ne se réduit jamais
+.tabBarMinimizeBehavior(.onScrollDown)
+.tabBarMinimizeBehavior(.onScrollUp)</code></pre>
+  <p><code>RootTabView</code> ne posait initialement aucun de ces modificateurs, donc c'était <code>.automatic</code> qui s'appliquait par défaut — le système décide seul, selon des critères non documentés précisément, quand réduire la barre. C'est justement ce qui rend le résultat difficile à vérifier : sans savoir quand <code>.automatic</code> décide de déclencher la réduction, il n'y a pas de geste fiable à reproduire pour observer <code>compactContent</code> à l'écran. La correction : fixer le comportement explicitement, pour le rendre prévisible.</p>
+  <pre><code>TabView {
+    DiscoveryView()
+        .tabItem { Label("Découvrir", systemImage: "book.closed.fill") }
+    LibraryView()
+        .tabItem { Label("Bibliothèque", systemImage: "music.note.list") }
+}
+.tabBarMinimizeBehavior(.onScrollDown)
+.tabViewBottomAccessory(isEnabled: player.currentSong != nil && !player.isExpanded) {
+    if let song = player.currentSong {
+        MiniPlayerBar(song: song)
+    }
+}</code></pre>
+  <p>Avec <code>.onScrollDown</code>, la règle devient simple et reproductible : scroller vers le bas dans le contenu de l'onglet actif réduit la barre (et l'accessoire avec elle) ; scroller vers le haut la fait réapparaître. Plus besoin de deviner ce que <code>.automatic</code> aurait décidé.</p>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Lance une lecture (par exemple depuis une chanson de la playlist "Best Of Rock", qui contient une trentaine de titres — largement de quoi remplir l'écran).</li>
+      <li>Retourne sur l'onglet Découvrir, puis ouvre cette même playlist pour ouvrir <code>PlaylistDetailView</code> : le mini-lecteur complet (pochette + titre + artiste + bouton) doit être visible au-dessus de la barre d'onglets.</li>
+      <li>Scrolle vers le bas dans la liste des chansons. La barre d'onglets doit se réduire, et le mini-lecteur ne doit plus afficher que le bouton play/pause, fondu dans la barre réduite.</li>
+      <li>Scrolle vers le haut : la barre d'onglets et le mini-lecteur complet doivent réapparaître tels quels.</li>
+    </ol>
+  </div>
+
+  <h2>Lire l'état de l'accessoire depuis son contenu</h2>
+  <p>SwiftUI expose cet état via l'environnement, directement lisible depuis <code>MiniPlayerBar</code> :</p>
+  <pre><code>@Environment(\.tabViewBottomAccessoryPlacement) private var placement</code></pre>
+  <p><code>placement</code> est de type <code>TabViewBottomAccessoryPlacement?</code>, avec trois valeurs possibles : <code>.expanded</code> (accessoire affiché en entier au-dessus de la barre), <code>.inline</code> (fondu dans la barre réduite), ou <code>nil</code> (placement non défini — on le traite comme <code>.expanded</code> par prudence).</p>
+
+  <h2>Deux présentations pour un seul composant</h2>
+  <pre><code>struct MiniPlayerBar: View {
+    @Injected(\.player) private var player
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+
+    let song: Song
+
+    var body: some View {
+        Group {
+            if placement == .inline {
+                compactContent
+            } else {
+                expandedContent
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            player.isExpanded = true
+        }
+    }
+
+    private var compactContent: some View {
+        Button {
+            player.isPlaying.toggle()
+        } label: {
+            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                .font(.title3)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
+    }
+
+    private var expandedContent: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.quaternary)
+                .frame(width: 40, height: 40)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(song.title).font(.subheadline.bold())
+                Text(song.artist).font(.caption).foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { player.isExpanded = true }
+
+            Spacer()
+
+            Button {
+                player.isPlaying.toggle()
+            } label: {
+                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
+        }
+        .padding(.horizontal, 16)
+    }
+}</code></pre>
+  <p><code>expandedContent</code> reprend exactement le contenu de la Leçon 20, inchangé. <code>compactContent</code> ne garde que le strict nécessaire : le bouton play/pause, seul élément qui a une chance de rester lisible et cliquable dans l'espace réduit de la barre d'onglets minimisée.</p>
+
+  <details class="aside">
+    <summary>Où est passé le .onTapGesture de expandedContent ?</summary>
+    <p>Il n'a pas disparu : il est monté d'un niveau, posé une seule fois sur le <code>Group</code> dans <code>body</code>, plutôt que dupliqué séparément dans <code>compactContent</code> et <code>expandedContent</code>. Pour <code>expandedContent</code>, le comportement est identique à la Leçon 20. Ça soulève une question légitime pour <code>compactContent</code> : le bouton play/pause s'y trouve directement enveloppé par ce <code>.onTapGesture</code> ambiant, sans <code>HStack</code> intermédiaire comme dans <code>expandedContent</code> — est-ce que le tap sur le bouton risque de déclencher aussi l'expansion ? Non : dans SwiftUI, quand deux vues imbriquées portent chacune un geste de tap, c'est toujours celui de la vue la plus interne qui se déclenche en premier, qu'il y ait ou non un conteneur entre les deux. Le <code>Button</code> garde donc la priorité, dans les deux présentations.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Pourquoi ne pas essayer de faire tenir la pochette et le titre en plus petit ?</summary>
+    <p>C'est tentant, mais ça déplacerait le problème sans le résoudre : réduire une pochette de 40×40 ou un texte déjà en <code>.caption</code> les rendrait illisibles plutôt que simplement absents. Le choix fait ici est le même que celui d'Apple Music dans son propre accessoire compact — afficher moins d'éléments, mais tous parfaitement lisibles, plutôt que tout garder en miniature.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Ce que ça change pour VoiceOver</summary>
+    <p>En <code>compactContent</code>, il n'y a plus de <code>VStack</code> titre/artiste avec son <code>.accessibilityAction</code> pour ouvrir le lecteur plein écran (le sujet de la Leçon 15) — puisqu'il n'y a plus de titre ni d'artiste affichés à cet endroit. Ce n'est pas une régression : il n'existe simplement plus rien à annoncer ou à activer à cet endroit tant que l'utilisateur reste dans l'état compact. L'action d'expansion reste disponible dès que l'accessoire repasse en <code>.expanded</code> (par exemple en remontant en haut de la liste).</p>
+  </details>
+
+  <table class="compare-table">
+    <tr><th>Avant (Leçon 20)</th><th>Après</th></tr>
+    <tr><td>Un seul contenu, pensé pour l'état étendu uniquement</td><td>Deux présentations, choisies selon <code>tabViewBottomAccessoryPlacement</code></td></tr>
+    <tr><td>Pochette + titre + artiste + bouton, quel que soit l'espace disponible</td><td>Contenu complet si étendu, bouton seul si la barre d'onglets est réduite</td></tr>
+    <tr><td>.automatic — déclenchement non prévisible, impossible à tester à coup sûr</td><td>.onScrollDown — scénario reproductible : scroller vers le bas, puis vers le haut</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Sources primaires recommandées</div>
+    <a href="https://exploreswiftui.com/library/tabview/tabview-bottom-accessory-placement">TabView Bottom Accessory Placement</a> (exploreswiftui.com) — les cas de <code>TabViewBottomAccessoryPlacement</code> et l'exemple de lecture via <code>@Environment</code>.<br>
+    <a href="https://swiftuisnippets.wordpress.com/2025/07/15/tab-bar-customization-in-swiftui-for-ios-26/">Tab Bar Customization in SwiftUI for iOS 26</a> (swiftuisnippets.wordpress.com) — les quatre valeurs de <code>.tabBarMinimizeBehavior</code>.<br>
+    <a href="https://www.hackingwithswift.com/books/ios-swiftui/how-to-use-gestures-in-swiftui">How to use gestures in SwiftUI</a> (hackingwithswift.com) — confirme que le geste de la vue la plus interne se déclenche toujours avant celui d'un parent, quel que soit le conteneur entre les deux.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Qu'est-ce qui déclenche le passage de l'accessoire en état <code>.inline</code> ?</p>
+    <label><input type="radio" name="q1" value="a"> L'utilisateur appuie longuement sur le mini-lecteur pour le réduire</label>
+    <label><input type="radio" name="q1" value="b"> player.isExpanded passe à true puis revient à false rapidement</label>
+    <label><input type="radio" name="q1" value="c"> La barre d'onglets se réduit pendant le scroll, selon tabBarMinimizeBehavior</label>
+    <label><input type="radio" name="q1" value="d"> Le système bascule automatiquement après dix secondes de lecture</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">2. Pourquoi fixer <code>.tabBarMinimizeBehavior(.onScrollDown)</code> explicitement plutôt que de garder <code>.automatic</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce que .automatic ne permet pas de savoir quand tester le mode compact de façon fiable</label>
+    <label><input type="radio" name="q2" value="b"> Parce que .automatic a été retiré du SDK SwiftUI depuis la version 26.2</label>
+    <label><input type="radio" name="q2" value="c"> Parce que .onScrollDown accélère sensiblement le défilement des listes longues du projet</label>
+    <label><input type="radio" name="q2" value="d"> Parce que .automatic empêche tabViewBottomAccessoryPlacement de renvoyer une valeur exploitable</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi <code>compactContent</code> ne garde-t-il que le bouton play/pause, sans réduire la pochette et le texte en plus petit ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que Text et Image ne peuvent pas être affichés dans un accessoire inline</label>
+    <label><input type="radio" name="q3" value="b"> Parce que le bouton doit rester seul pour des raisons de performance de rendu</label>
+    <label><input type="radio" name="q3" value="c"> Parce que .buttonStyle(.plain) impose cette contrainte visuelle par défaut</label>
+    <label><input type="radio" name="q3" value="d"> Parce qu'une pochette ou un texte rétrécis deviendraient illisibles plutôt qu'utiles</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">4. Que devient l'action VoiceOver d'expansion (ouvrir le lecteur plein écran depuis le titre) en état compact ?</p>
+    <label><input type="radio" name="q4" value="a"> Elle reste identique, VoiceOver continue d'annoncer le titre en plus petit</label>
+    <label><input type="radio" name="q4" value="b"> Elle disparaît avec le titre/artiste, et revient dès le retour à l'état étendu</label>
+    <label><input type="radio" name="q4" value="c"> Elle se déplace automatiquement sur le bouton play/pause à la place</label>
+    <label><input type="radio" name="q4" value="d"> Elle provoque un crash si VoiceOver est actif en mode compact</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le scénario de vérification ci-dessus s'appuie sur "Best Of Rock", qui a toujours assez de chansons pour remplir l'écran. Mais LibraryView affiche les chansons téléchargées par l'utilisateur, un nombre qui dépend de ce que tu as réellement téléchargé en testant l'app — demande à ton agent comment vérifier si cet onglet contient assez de contenu pour reproduire le même scénario, ou s'il faut d'abord télécharger plusieurs chansons.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0020-mini-lecteur-tabviewbottomaccessory.html">← Leçon 20 : le mini-lecteur qui cache le dernier élément</a></span>
+    <span>Leçon suivante : à définir</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
