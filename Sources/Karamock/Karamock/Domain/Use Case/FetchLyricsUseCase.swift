@@ -12,7 +12,7 @@ struct FetchLyricsUseCase: Sendable {
         self.repository = repository
     }
     
-    func callAsFunction(for song: Song) async throws -> [LyricsLine] {
+    func callAsFunction(for song: Song) async throws(LyricsError) -> [LyricsLine] {
         try await repository.lyrics(for: song)
     }
 }

@@ -21,10 +21,17 @@ final class FullScreenPlayerViewModel {
     }
     
     func loadLyrics() async {
-        do {
+        do throws(LyricsError){
             lyrics = try await fetchLyrics(for: song)
         } catch {
-            lyrics = [LyricsLine(time: 0, text: "Paroles indisponibles pour le moment.")]
+            switch error {
+            case .notFound:
+                lyrics = [LyricsLine(time: 0, text: "Paroles indisponibles pour cette chanson.")]
+            case .network:
+                lyrics = [LyricsLine(time: 0, text: "Connexion impossible. Réessayez")]
+            case .invalidURL, .malformedResponse:
+                lyrics = [LyricsLine(time: 0, text: "Paroles indisponibles pour le moment.")]
+            }
         }
     }
 }

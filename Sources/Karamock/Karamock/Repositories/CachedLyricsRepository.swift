@@ -8,7 +8,7 @@
 import Foundation
 
 nonisolated protocol LyricsRepository: Sendable {
-    func lyrics(for song: Song) async throws -> [LyricsLine]
+    func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine]
 }
 
 actor CachedLyricsRepository: LyricsRepository {
@@ -19,7 +19,7 @@ actor CachedLyricsRepository: LyricsRepository {
         self.service = service
     }
     
-    func lyrics(for song: Song) async throws -> [LyricsLine] {
+    func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine] {
         if let cached = cache[song.id] {
             return cached
         }
