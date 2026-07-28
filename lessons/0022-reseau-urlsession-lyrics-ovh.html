@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 22 — Réseau : de vraies paroles avec URLSession</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 22 · Réseau (1/N)</p>
+  <h1>De vraies paroles, récupérées avec URLSession</h1>
+  <p class="subtitle">Jusqu'ici, tout Karamock tourne avec des données factices — c'est le périmètre confirmé de la mission. Mais <code>mockLyrics</code> a un défaut amusant : les chansons du catalogue (Queen, Guns N' Roses, Eagles…) sont de <em>vraies</em> chansons. On peut donc leur trouver de vraies paroles, sans inventer aucune nouvelle fonctionnalité — juste brancher <code>FullScreenPlayerView</code> sur un vrai service public au lieu du tableau figé.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> un poste Swift/Apple Platforms senior suppose de savoir consommer une API REST proprement — construire une URL, décoder une réponse JSON, gérer l'asynchrone avec <code>async</code>/<code>await</code> — sans que ce soit noyé dans une fonctionnalité artificielle. Réutiliser le catalogue existant plutôt que d'inventer un écran de recherche garde cette première leçon réseau concentrée sur URLSession lui-même. Et comme le réseau introduit une vraie latence, c'est aussi l'occasion de réappliquer la distinction Service/Repository posée en Leçon 7 : le Service sait <em>faire</em> l'appel réseau, le Repository sait <em>retenir</em> ce qui a déjà été récupéré.
+  </div>
+
+  <h2>Le service public : api.lyrics.ovh</h2>
+  <p><a href="https://github.com/NTag/lyrics.ovh">lyrics.ovh</a> est une API gratuite, sans clé d'authentification, qui renvoie les paroles d'un titre à partir d'un artiste et d'un nom de chanson. Vérifié en direct pour cette leçon :</p>
+  <pre><code>GET https://api.lyrics.ovh/v1/Queen/Bohemian%20Rhapsody
+
+→ 200 OK
+{"lyrics":"Is this the real life ?\nIs this just fantasy ?\n…"}</code></pre>
+  <pre><code>GET https://api.lyrics.ovh/v1/Queen/ThisSongDoesNotExist
+
+→ 404 Not Found
+{"error":"No lyrics found"}</code></pre>
+  <p>Un seul champ <code>lyrics</code> en cas de succès : un texte brut avec des retours à la ligne (<code>\n</code>), sans aucun horodatage par ligne. C'est une différence importante avec <code>mockLyrics</code>, qui attache un <code>time</code> à chaque ligne pour piloter le surlignage dans <code>LyricsView</code> — il va falloir s'en accommoder.</p>
+
+  <h2>Construire l'URL : le piège des espaces et apostrophes</h2>
+  <p>"Sweet Child O' Mine", "Guns N' Roses" : les titres et artistes réels du catalogue contiennent des espaces et des apostrophes, invalides tels quels dans une URL. Il faut les encoder en pourcent-encodage avant de les insérer dans le chemin :</p>
+  <pre><code>private func lyricsURL(artist: String, title: String) -> URL? {
+    guard
+        let encodedArtist = artist.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+        let encodedTitle = title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+    else { return nil }
+    return URL(string: "https://api.lyrics.ovh/v1/\(encodedArtist)/\(encodedTitle)")
+}</code></pre>
+  <p><code>CharacterSet.urlPathAllowed</code> est l'ensemble de caractères que Foundation considère valides dans un segment de chemin d'URL — <code>addingPercentEncoding(withAllowedCharacters:)</code> remplace tout le reste par son équivalent <code>%XX</code> (un espace devient <code>%20</code>). Sans ça, une requête pour "Guns N' Roses" échouerait purement et simplement à se construire en URL valide.</p>
+  <p>Pour le moment, place <code>lyricsURL</code> en <code>private</code> dans le même fichier que le service qui l'utilise (<code>LyricsFetching</code>/<code>URLSessionLyricsFetching</code>, section suivante) — c'est un détail de construction d'URL propre à ce service, pas une API à exposer ailleurs dans le projet. Comme le rappelait déjà la Leçon 7 à propos de l'arborescence des dossiers : ce qui compte, c'est que <em>seul</em> le service parle de <code>URLSession</code>/URL — pas où exactement vit chaque fonction.</p>
+
+  <h2>Le service : protocole + implémentation réelle</h2>
+  <p>Même structure que <code>SongDownloading</code>/<code>MockSongDownloading</code> (Services/) — un protocole <code>Sendable</code>, une implémentation concrète :</p>
+  <pre><code>protocol LyricsFetching: Sendable {
+    func fetchLyrics(artist: String, title: String) async throws -> String
+}
+
+struct URLSessionLyricsFetching: LyricsFetching {
+    func fetchLyrics(artist: String, title: String) async throws -> String {
+        guard let url = lyricsURL(artist: artist, title: title) else {
+            throw URLError(.badURL)
+        }
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let response = try JSONDecoder().decode(LyricsResponse.self, from: data)
+        return response.lyrics
+    }
+}
+
+private struct LyricsResponse: Decodable {
+    let lyrics: String
+}</code></pre>
+  <p><code>URLSession.shared.data(from:)</code> est la variante <code>async</code> de la méthode historique à callback — elle suspend la fonction appelante jusqu'à la réponse, sans bloquer de thread ni imbriquer de closures. <code>JSONDecoder().decode(_:from:)</code> retrouve le JSON <code>{"lyrics": "…"}</code> reçu et le transforme directement en <code>LyricsResponse</code>, à condition que ses propriétés correspondent aux clés du JSON — exactement ce qu'on a vérifié plus haut. <code>LyricsFetching</code> s'arrête volontairement là : il sait <em>faire</em> l'appel réseau, rien de plus — ni mise en forme, ni mémorisation.</p>
+
+  <h2>Le repository : entre le UseCase et le service</h2>
+  <p>La Leçon 7 posait déjà la distinction : un <strong>Service</strong> (<code>SongDownloading</code>, <code>LyricsFetching</code>) sait <em>faire</em> quelque chose d'externe ; un <strong>Repository</strong> (<code>DownloadedSongsRepository</code>) sait <em>retenir</em> une collection d'objets du domaine et y donner accès. Pour les paroles, ce rôle de rétention a une vraie utilité : lyrics.ovh n'a aucune raison d'être rappelé deux fois pour la même chanson dans une session. Le repository mémorise donc les <code>[LyricsLine]</code> déjà obtenues, et ne redemande au service que ce qu'il n'a pas encore :</p>
+  <pre><code>nonisolated protocol LyricsRepository: Sendable {
+    func lyrics(for song: Song) async throws -> [LyricsLine]
+}
+
+actor CachedLyricsRepository: LyricsRepository {
+    private let service: LyricsFetching
+    private var cache: [Song.ID: [LyricsLine]] = [:]
+
+    init(service: LyricsFetching) {
+        self.service = service
+    }
+
+    func lyrics(for song: Song) async throws -> [LyricsLine] {
+        if let cached = cache[song.id] { return cached }
+
+        let rawText = try await service.fetchLyrics(artist: song.artist, title: song.title)
+        let lines = rawText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard !lines.isEmpty else { return [] }
+        let interval = song.durationInSeconds / Double(lines.count)
+        let result = lines.enumerated().map { index, text in
+            LyricsLine(time: Double(index) * interval, text: text)
+        }
+
+        cache[song.id] = result
+        return result
+    }
+}</code></pre>
+  <p>Deux idées à retenir ici. D'abord, le <code>service</code> reste une simple propriété du repository — le UseCase ne le connaît plus du tout, exactement comme <code>FetchDownloadedSongsUseCase</code> (Leçon 7) ne connaît aucun <code>Service</code>, seulement son <code>DownloadedSongsRepository</code>. Ensuite, <code>CachedLyricsRepository</code> est un <code>actor</code> et non une <code>struct</code> : <code>cache</code> est un état mutable partagé, potentiellement lu et écrit par plusieurs appels concurrents (deux écrans ouvrant deux chansons en même temps) — même raisonnement que <code>SimpleDownloadedSongsRepository</code>. La transformation texte-brut-vers-<code>[LyricsLine]</code>, elle, a simplement migré du UseCase vers le repository : c'est elle qui décide de la donnée qu'elle retient, donc c'est elle qui la façonne.</p>
+
+  <details class="aside">
+    <summary>Correctif rencontré à l'implémentation : <code>song.durationInSeconds</code> devait devenir <code>nonisolated</code></summary>
+    <p><code>lyrics(for:)</code> lit <code>song.durationInSeconds</code> à la ligne <code>let interval = song.durationInSeconds / Double(lines.count)</code> — une propriété calculée définie dans <code>Views/Common/TimeUtilities.swift</code>, sans <code>await</code>. Or <code>CachedLyricsRepository</code> est un <code>actor</code>, isolé à son propre exécuteur, pas au <code>MainActor</code>. Avec <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> (Leçon 19), <code>durationInSeconds</code> était implicitement <code>@MainActor</code> comme toute déclaration non annotée du projet — donc inaccessible sans <code>await</code> depuis l'acteur du repository. Le correctif, identique dans l'esprit à celui de la Leçon 19 : ajouter <code>nonisolated</code> devant <code>var durationInSeconds</code>. Cette propriété ne touche que ses propres paramètres (<code>duration</code>, une <code>String</code>) — elle n'a besoin d'appartenir à aucun acteur en particulier, donc rien ne justifiait qu'elle hérite du <code>MainActor</code> par défaut.</p>
+  </details>
+
+  <h2>Le UseCase : une orchestration mince</h2>
+  <pre><code>struct FetchLyricsUseCase: Sendable {
+    let repository: LyricsRepository
+
+    nonisolated init(repository: LyricsRepository) {
+        self.repository = repository
+    }
+
+    func callAsFunction(for song: Song) async throws -> [LyricsLine] {
+        try await repository.lyrics(for: song)
+    }
+}</code></pre>
+  <p>Le UseCase ne fait plus que déléguer — il ne sait ni comment les paroles sont récupérées (réseau ? cache ?), ni comment le texte brut devient des <code>LyricsLine</code>. C'est exactement la forme de <code>FetchDownloadedSongsUseCase</code> : un point d'entrée stable pour la vue, derrière lequel le repository est libre de changer de stratégie sans que personne d'autre n'ait à bouger.</p>
+
+  <details class="aside">
+    <summary>Le surlignage synchronisé devient une approximation, pas une vraie fonctionnalité</summary>
+    <p>lyrics.ovh ne fournit aucun horodatage par ligne — juste un bloc de texte. Pour rester compatible avec <code>LyricsView</code> (qui attend un <code>[LyricsLine]</code> avec un <code>time</code> par ligne, cf. Leçon 16), le repository répartit les lignes uniformément sur la durée totale de la chanson. C'est une approximation assumée, pas un vrai karaoké synchronisé — les vraies paroles ne défilent pas forcément au bon rythme. Une vraie synchronisation demanderait des données ligne-par-ligne avec horodatage (type LRC), que cette API ne fournit pas.</p>
+  </details>
+
+  <h2>Brancher le repository et le UseCase dans le Container</h2>
+  <pre><code>// KaramockContainer.swift
+var lyricsFetching: Factory<LyricsFetching> {
+    self { URLSessionLyricsFetching() }
+}
+
+var lyricsRepository: Factory<LyricsRepository> {
+    self { CachedLyricsRepository(service: self.lyricsFetching()) }
+        .singleton
+}
+
+var fetchLyrics: Factory<FetchLyricsUseCase> {
+    self { FetchLyricsUseCase(repository: self.lyricsRepository()) }
+}</code></pre>
+  <p><code>lyricsRepository</code> est enregistré <code>.singleton</code>, comme <code>downloadedSongsRepository</code> — sans ça, Factory recréerait un <code>CachedLyricsRepository</code> vide (donc un cache vide) à chaque résolution, et la mémorisation ne servirait jamais à rien.</p>
+
+  <h2>Le ViewModel : la vue ne doit pas appeler le UseCase elle-même</h2>
+  <p><code>FullScreenPlayerView</code> n'a aujourd'hui aucun ViewModel dédié — elle lit directement <code>@Injected(\.player)</code> (un état d'app partagé) et gère <code>progress</code> en <code>@State</code> local. Injecter <code>@Injected(\.fetchLyrics)</code> directement dans la vue suivrait ce même raccourci, mais casserait la couche que le reste du projet respecte partout ailleurs : <code>SongDownloadViewModel</code> (Leçon 6-7) et <code>LibraryViewModel</code> (Leçon 12) sont les deux seuls points de contact autorisés entre une vue et un UseCase — jamais la vue directement. Une vue qui appelle elle-même un UseCase réseau perd la même chose qu'un ViewModel qui appellerait un Service directement (Leçon 8) : plus aucun endroit unique où tester la logique de chargement sans <code>UIKit</code>/SwiftUI.</p>
+  <pre><code>@MainActor
+@Observable
+final class FullScreenPlayerViewModel {
+    private(set) var lyrics: [LyricsLine] = mockLyrics
+
+    private let song: Song
+    private let fetchLyrics: FetchLyricsUseCase
+
+    init(song: Song, fetchLyrics: FetchLyricsUseCase) {
+        self.song = song
+        self.fetchLyrics = fetchLyrics
+    }
+
+    func loadLyrics() async {
+        do {
+            lyrics = try await fetchLyrics(for: song)
+        } catch {
+            lyrics = [LyricsLine(time: 0, text: "Paroles indisponibles pour le moment.")]
+        }
+    }
+}</code></pre>
+  <pre><code>// KaramockContainer.swift
+@MainActor
+var fullScreenPlayerViewModel: ParameterFactory<Song, FullScreenPlayerViewModel> {
+    self { song in FullScreenPlayerViewModel(song: song, fetchLyrics: self.fetchLyrics()) }
+}</code></pre>
+  <pre><code>// FullScreenPlayerView.swift
+@State private var viewModel: FullScreenPlayerViewModel?
+// … @Injected(\.player), progress, timer inchangés
+// …
+LyricsView(lyrics: viewModel?.lyrics ?? mockLyrics, currentTime: progress)
+    .frame(height: 160)
+// …
+.task(id: song.id) {
+    let viewModel = Container.shared.fullScreenPlayerViewModel(song)
+    self.viewModel = viewModel
+    await viewModel.loadLyrics()
+}</code></pre>
+  <p><code>ParameterFactory<Song, FullScreenPlayerViewModel></code> et l'appel <code>Container.shared.fullScreenPlayerViewModel(song)</code> dans <code>.task</code> reprennent exactement le schéma déjà en place pour <code>songDownloadViewModel</code>/<code>SongOptionsSheet</code> — un ViewModel qui a besoin d'un paramètre à la construction (ici, la chanson) n'est jamais résolu par simple <code>@Injected</code>. <code>.task(id: song.id)</code> reste nécessaire à cet endroit précis : <code>RootTabView</code> présente <code>FullScreenPlayerView</code> via <code>.fullScreenCover(isPresented:)</code> avec <code>song</code> lu depuis <code>player.currentSong</code>, pas <code>.fullScreenCover(item:)</code> — la même instance de vue peut donc recevoir une chanson différente sans être fermée puis rouverte, et il faut alors reconstruire le ViewModel (donc relancer <code>loadLyrics()</code>) pour la nouvelle chanson.</p>
+
+  <details class="aside">
+    <summary>Le do/catch dans loadLyrics() est volontairement sommaire</summary>
+    <p>Toute erreur — pas de réseau, chanson introuvable sur lyrics.ovh, JSON malformé — finit dans la même case <code>catch</code>, avec le même message générique. C'est honnête pour cette leçon centrée sur URLSession, mais ce n'est pas ce qu'on ferait dans une app industrielle : distinguer un 404 (chanson non trouvée) d'une vraie panne réseau, choisir quoi afficher à l'utilisateur dans chaque cas, décider quoi journaliser. C'est exactement le sujet de la prochaine leçon.</p>
+  </details>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Ouvre une chanson dont le titre existe vraiment — "Bohemian Rhapsody" de Queen, dans la playlist "Best Of Rock", est vérifiée fonctionner au moment de cette leçon. <code>LyricsView</code> doit afficher ses vraies paroles au lieu du texte simulé.</li>
+      <li>Ressors de l'écran, coupe le Wi-Fi/les données, puis rouvre la même chanson : les paroles doivent réapparaître immédiatement, sans délai ni erreur — c'est le repository qui répond depuis son cache, sans repasser par <code>URLSession</code>.</li>
+      <li>Ouvre une chanson dont l'association artiste/titre est peu probable sur lyrics.ovh (un titre du mock qui n'existe pas vraiment, ou un artiste mal orthographié pour tester). Le message de repli "Paroles indisponibles pour le moment." doit s'afficher, sans crash.</li>
+      <li>Coupe le Wi-Fi/les données avant d'ouvrir une chanson jamais vue auparavant : même résultat attendu — repli propre, pas de blocage de l'interface.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>mockLyrics</code>, un tableau Swift figé dans le code</td><td>Paroles réelles récupérées via <code>api.lyrics.ovh</code></td></tr>
+    <tr><td>Aucun appel réseau dans tout le projet</td><td><code>URLSession.shared.data(from:)</code> dans <code>LyricsFetching</code>, appelé par <code>CachedLyricsRepository</code></td></tr>
+    <tr><td>Horodatage inventé à la main dans le mock</td><td>Horodatage approximé uniformément — assumé, pas une vraie synchro</td></tr>
+    <tr><td><code>FetchLyricsUseCase</code> parlait directement au service réseau</td><td><code>FetchLyricsUseCase</code> ne connaît que <code>LyricsRepository</code>, qui mémorise et délègue au service</td></tr>
+    <tr><td><code>FullScreenPlayerView</code> appelait le UseCase elle-même</td><td><code>FullScreenPlayerViewModel</code> s'interpose, comme partout ailleurs dans le projet</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Sources primaires recommandées</div>
+    <a href="https://github.com/NTag/lyrics.ovh">lyrics.ovh</a> (GitHub, NTag) — le code source et la spécification de l'API ; réponses vérifiées directement en direct pour cette leçon.<br>
+    <a href="https://developer.apple.com/documentation/foundation/nsstring/1411946-addingpercentencoding">addingPercentEncoding(withAllowedCharacters:)</a> (Apple Developer Documentation) — le mécanisme de pourcent-encodage utilisé pour construire l'URL.<br>
+    <a href="0007-domain-usecase-et-repository.html">Leçon 7</a> — la distinction Service/Repository réappliquée ici au réseau.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi encoder artist/title avec <code>addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)</code> avant de construire l'URL ?</p>
+    <label><input type="radio" name="q1" value="a"> Pour que JSONDecoder accepte de décoder la réponse ensuite</label>
+    <label><input type="radio" name="q1" value="b"> Pour que les espaces et apostrophes des vrais titres restent valides dans une URL</label>
+    <label><input type="radio" name="q1" value="c"> Pour respecter une limite de longueur imposée par lyrics.ovh</label>
+    <label><input type="radio" name="q1" value="d"> Pour empêcher deux requêtes identiques d'être envoyées en double</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Que fournit exactement la réponse JSON de lyrics.ovh en cas de succès ?</p>
+    <label><input type="radio" name="q2" value="a"> Un tableau de lignes, chacune avec son propre horodatage</label>
+    <label><input type="radio" name="q2" value="b"> Un fichier audio encodé en base64 en plus du texte</label>
+    <label><input type="radio" name="q2" value="c"> Les paroles traduites automatiquement en plusieurs langues</label>
+    <label><input type="radio" name="q2" value="d"> Un seul champ lyrics contenant tout le texte brut avec des \n</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi le surlignage de la ligne courante n'est-il plus une vraie synchronisation avec les paroles réelles ?</p>
+    <label><input type="radio" name="q3" value="a"> lyrics.ovh ne fournit aucun horodatage par ligne, seulement du texte</label>
+    <label><input type="radio" name="q3" value="b"> LyricsView a été modifié pour ne plus surligner aucune ligne</label>
+    <label><input type="radio" name="q3" value="c"> Le Slider de progression a été retiré de FullScreenPlayerView</label>
+    <label><input type="radio" name="q3" value="d"> Les vraies paroles sont toujours plus courtes que les paroles simulées</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">4. Pourquoi utiliser <code>.task(id: song.id)</code> plutôt que <code>.onAppear</code> pour déclencher la requête ?</p>
+    <label><input type="radio" name="q4" value="a"> .onAppear ne peut pas contenir de code asynchrone du tout</label>
+    <label><input type="radio" name="q4" value="b"> .task(id:) s'exécute avant que la vue soit réellement affichée à l'écran</label>
+    <label><input type="radio" name="q4" value="c"> .task(id:) relance automatiquement la requête si la chanson affichée change</label>
+    <label><input type="radio" name="q4" value="d"> .onAppear a été supprimé de SwiftUI dans les versions récentes</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">5. Pourquoi <code>FetchLyricsUseCase</code> dépend-il de <code>LyricsRepository</code> plutôt que directement de <code>LyricsFetching</code> ?</p>
+    <label><input type="radio" name="q5" value="a"> LyricsFetching ne peut pas être appelé depuis une struct Sendable</label>
+    <label><input type="radio" name="q5" value="b"> Le repository mémorise les paroles déjà obtenues et décide seul quand rappeler le service</label>
+    <label><input type="radio" name="q5" value="c"> C'est une contrainte imposée par FactoryKit sur tous les UseCase du projet</label>
+    <label><input type="radio" name="q5" value="d"> Cela permet d'éviter d'écrire un protocole Sendable pour le service réseau</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">6. Pourquoi introduire <code>FullScreenPlayerViewModel</code> plutôt que d'injecter <code>fetchLyrics</code> directement dans <code>FullScreenPlayerView</code> ?</p>
+    <label><input type="radio" name="q6" value="a"> @Injected ne fonctionne que dans les classes marquées @Observable</label>
+    <label><input type="radio" name="q6" value="b"> Un UseCase ne peut être appelé que depuis un contexte async, jamais depuis une vue</label>
+    <label><input type="radio" name="q6" value="c"> FactoryKit interdit techniquement d'injecter un UseCase dans une View</label>
+    <label><input type="radio" name="q6" value="d"> Garder la même couche partout : la vue ne parle jamais directement à un UseCase</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu veux voir comment enregistrer un MockLyricsFetching (ou un MockLyricsRepository) dans le Container pour tester FetchLyricsUseCase sans appel réseau réel, comme MockSongDownloading pour les téléchargements ? Demande à ton agent de l'écrire, façon Leçon 13.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0021-mini-lecteur-compact-placement.html">← Leçon 21 : le mini-lecteur compact</a></span>
+    <span>Leçon suivante : la gestion des erreurs dans une app industrielle</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
