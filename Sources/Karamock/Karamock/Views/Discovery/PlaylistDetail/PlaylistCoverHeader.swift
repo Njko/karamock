@@ -12,8 +12,12 @@ struct PlaylistCoverHeader: View {
     
     var body: some View {
         ZStack {
-            LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                .frame(minHeight: 220)
+            LinearGradient(
+                colors: playlist.gradientColors,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .frame(minHeight: 220)
             
             Text(playlist.title)
                 .font(.title2.bold())

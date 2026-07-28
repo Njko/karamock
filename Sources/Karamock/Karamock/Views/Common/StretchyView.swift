@@ -17,7 +17,11 @@ extension View {
             let newHeight = currentHeight + positiveOffset
             let scaleFactor = newHeight / currentHeight
             
-            return effect.scaleEffect(x: scaleFactor, y: scaleFactor, anchor: .bottom)
+            return effect.scaleEffect(
+                x: scaleFactor,
+                y: scaleFactor,
+                anchor: .bottom
+            )
             
         }
     }
