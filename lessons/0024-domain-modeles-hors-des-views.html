@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 24 — Nettoyage : le Domain a besoin d'un vrai chez-lui</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 24 · Nettoyage architecture (1/N)</p>
+  <h1>Le Domain a besoin d'un vrai chez-lui</h1>
+  <p class="subtitle">L'audit Clean Architecture du 28 juillet (<code>audits/2026-07-28-clean-architecture-audit.md</code>) note le Domain à 4.5/10 : "quasi-vide — entités métier dispersées dans <code>Views/</code>". Cette leçon ouvre un court arc dédié à résoudre ce que l'audit a remonté, dans l'ordre du risque le plus faible au plus élevé. On commence par le plus sûr : déplacer des fichiers, sans changer une seule ligne de logique.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> la mission prévoyait une architecture en couches introduite "pour être capable de discuter de structuration d'app à un niveau Tech Lead". Réagir à un audit externe — trier ce qui est vraiment un risque de ce qui est cosmétique, corriger dans le bon ordre — est exactement ce réflexe-là en action, pas une leçon de plus sur la théorie des couches.
+  </div>
+
+  <h2>Ce que l'audit a trouvé</h2>
+  <p>Trois constats précis, tous vérifiés dans le code actuel :</p>
+  <ul>
+    <li><strong>Les entités métier vivent dans <code>Views/</code></strong> — <code>Song</code>, <code>LyricsLine</code>, <code>KaraokeMode</code> dans <code>Views/Common/Model/</code>, <code>Playlist</code> dans <code>Views/Player/Model/</code>, <code>LyricsError</code> dans <code>Services/</code>. Le dossier <code>Domain/</code> ne contient à ce jour que <code>DownloadState</code> et les UseCase.</li>
+    <li><strong><code>Playlist</code> importe SwiftUI</strong> — <code>let gradientColors: [Color]</code> couple une entité métier au framework d'UI. Impossible de tester ou de réutiliser ce type sans importer SwiftUI avec lui.</li>
+    <li><strong>La couche Data dépend de la couche Views</strong> — <code>CachedLyricsRepository</code> (Data) utilise <code>song.durationInSeconds</code>, défini dans <code>Views/Common/TimeUtilities.swift</code>. Le sens de dépendance correct est Data → Domain, jamais Data → Views.</li>
+  </ul>
+  <p>Aucun de ces trois points ne change le comportement de l'app — ce sont des questions d'organisation et de direction de dépendance, pas des bugs. C'est justement pour ça qu'on commence ici : le risque de casser quelque chose est proche de zéro, et ça prépare le terrain pour les leçons suivantes de cet arc, qui toucheront à du vrai comportement.</p>
+
+  <h2>Déplacer les entités, sans rien changer d'autre</h2>
+  <p>Quatre fichiers changent simplement de dossier — contenu identique :</p>
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>Views/Common/Model/Song.swift</code></td><td><code>Domain/Models/Song.swift</code></td></tr>
+    <tr><td><code>Views/Common/Model/LyricsLine.swift</code></td><td><code>Domain/Models/LyricsLine.swift</code></td></tr>
+    <tr><td><code>Views/Common/Model/KaraokeMode.swift</code></td><td><code>Domain/Models/KaraokeMode.swift</code></td></tr>
+    <tr><td><code>Services/LyricsError.swift</code></td><td><code>Domain/Models/LyricsError.swift</code></td></tr>
+  </table>
+  <p>Dans Xcode : glisser chaque fichier vers son nouveau groupe suffit (clic droit sur <code>Domain</code> → New Group "Models" s'il n'existe pas déjà, puis glisser-déposer depuis le Navigator). Le contenu Swift ne change pas d'un caractère — seul l'emplacement dans l'arborescence du projet change.</p>
+
+  <details class="aside">
+    <summary><code>LyricsLine.swift</code> contient aussi <code>mockLyrics</code> — on ne le touche pas ici</summary>
+    <p><code>let mockLyrics: [LyricsLine] = [...]</code> est une donnée de test qui vit dans le bundle de production — c'est un problème distinct, déjà repéré par l'audit (point #9), qui sera traité dans une leçon dédiée au nettoyage du code de test hors du bundle prod. Le déplacer maintenant, en même temps que la struct <code>LyricsLine</code>, mélangerait deux sujets dans une leçon censée rester "juste un déplacement de fichiers".</p>
+  </details>
+
+  <h2>Playlist : sortir <code>Color</code> du Domain</h2>
+  <p>Ce cas est le seul des quatre qui touche vraiment à du code, pas juste à un emplacement de fichier :</p>
+  <pre><code>// AVANT — Views/Player/Model/Playlist.swift
+import Foundation
+import SwiftUI
+
+struct Playlist: Identifiable, Hashable {
+    let id = UUID()
+    let title: String
+    let gradientColors: [Color]
+    let songs: [Song]
+}</code></pre>
+  <pre><code>// APRÈS — Domain/Models/Playlist.swift
+import Foundation
+
+struct Playlist: Identifiable, Hashable {
+    let id = UUID()
+    let title: String
+    let songs: [Song]
+}</code></pre>
+  <p><code>gradientColors</code> n'est pas une donnée métier — Playlist n'a pas besoin de savoir qu'elle a une couleur pour exister. C'est un détail de présentation, qui doit vivre côté vue :</p>
+  <pre><code>// NOUVEAU — Views/Player/Model/Playlist+GradientColors.swift
+import SwiftUI
+
+extension Playlist {
+    var gradientColors: [Color] {
+        switch title {
+        case "Best Of Rock":
+            return [.red, .orange]
+        case "Années 2000\nen France":
+            return [.blue, .green]
+        case "Karaoké\nClassics":
+            return [.yellow, .purple]
+        default:
+            return [.gray]
+        }
+    }
+}</code></pre>
+  <p><code>PlaylistCard</code> et <code>PlaylistCoverHeader</code> ne changent pas une ligne : ils lisent <code>playlist.gradientColors</code> exactement comme avant — c'est toujours une propriété calculée sur <code>Playlist</code>, juste définie dans une extension côté <code>Views/</code> plutôt que comme propriété stockée sur le type lui-même. Seul <code>MockPlaylist.swift</code> change, en retirant l'argument devenu inutile :</p>
+  <pre><code>// MockPlaylist.swift — avant
+Playlist(title: "Best Of Rock", gradientColors: [.red, .orange], songs: [ ... ])
+
+// MockPlaylist.swift — après
+Playlist(title: "Best Of Rock", songs: [ ... ])</code></pre>
+
+  <details class="aside">
+    <summary>Faire correspondre sur <code>title</code> est un compromis, pas une solution définitive</summary>
+    <p>Un <code>switch</code> sur une chaîne de caractères est fragile : une faute de frappe dans un futur titre de playlist tombe silencieusement dans <code>default</code>, sans avertissement. C'est un compromis honnête ici, pas une bonne pratique à généraliser — la vraie solution demanderait un identifiant stable et dédié pour associer une playlist à son thème visuel, plutôt que son titre affiché. Rien de plus robuste n'est proposé pour l'instant : <code>Playlist.id</code> est un <code>UUID()</code> régénéré à chaque lancement, donc pas plus fiable que <code>title</code> pour cet usage — même souci d'identité instable que <code>Song.id</code>, que l'audit signale aussi et qu'une prochaine leçon de cet arc corrigera.</p>
+  </details>
+
+  <h2>TimeUtilities : scinder en deux, selon qui en a besoin</h2>
+  <p><code>Views/Common/TimeUtilities.swift</code> mélangeait une extension de domaine (<code>durationInSeconds</code>, utilisée par <code>CachedLyricsRepository</code> en couche Data) et une fonction de présentation (<code>formatTime</code>, qui formate un <code>TimeInterval</code> en chaîne "MM:SS" pour l'affichage). Les séparer élimine la dépendance Data → Views identifiée par l'audit :</p>
+  <pre><code>// NOUVEAU — Domain/Extensions/Song+Duration.swift
+import Foundation
+
+extension Song {
+    nonisolated var durationInSeconds: TimeInterval {
+        let parts = duration.split(separator: ":").compactMap { Double($0) }
+        guard parts.count == 2 else { return 0 }
+        return parts[0] * 60 + parts[1]
+    }
+}</code></pre>
+  <pre><code>// NOUVEAU — Views/Common/TimeFormatter.swift
+import Foundation
+
+func formatTime(_ seconds: TimeInterval) -> String {
+    let total = Int(seconds)
+    return String(format: "%02d:%02d", total / 60, total % 60)
+}</code></pre>
+  <p><code>Views/Common/TimeUtilities.swift</code> disparaît, remplacé par ces deux fichiers. <code>CachedLyricsRepository</code> (Data) dépend maintenant de <code>Domain/Extensions/Song+Duration.swift</code> (Domain) — Data → Domain, le seul sens autorisé. <code>FullScreenPlayerView</code> continue d'utiliser <code>song.durationInSeconds</code> sans rien changer, Presentation → Domain étant tout aussi correct.</p>
+
+  <details class="aside">
+    <summary>En creusant : <code>formatTime</code> ne semble appelé nulle part actuellement</summary>
+    <p>Une recherche dans tout <code>Sources/Karamock/</code> ne trouve aucun appel à <code>formatTime</code> — la fonction existe mais n'est branchée sur aucun écran. Rien à voir avec le sujet de cette leçon ni avec un point de l'audit ; à garder en tête pour une passe de nettoyage future (soit la brancher quelque part, soit la retirer si elle est vraiment inutile).</p>
+  </details>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build du projet (⌘B) : doit réussir sans erreur ni avertissement nouveau — c'est un pur déplacement, rien ne doit casser la compilation.</li>
+      <li>Onglet "Découvrir" : les trois playlists mock doivent garder exactement leurs couleurs actuelles (Best Of Rock en rouge/orange, Années 2000 en bleu/vert, Karaoké Classics en jaune/violet) — aucun changement visuel attendu.</li>
+      <li>Ouvre une chanson et lance la lecture : le Slider de progression et le lecteur plein écran doivent se comporter exactement comme avant (durée totale correcte, décompte qui avance).</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>Domain/ ne contient que DownloadState + UseCase</td><td>Domain/Models/ regroupe Song, LyricsLine, KaraokeMode, Playlist, LyricsError</td></tr>
+    <tr><td>Playlist importe SwiftUI, stocke gradientColors</td><td>Playlist est un type de données pur ; gradientColors vit côté Views</td></tr>
+    <tr><td>CachedLyricsRepository (Data) dépend de Views/Common/TimeUtilities.swift</td><td>CachedLyricsRepository dépend de Domain/Extensions/Song+Duration.swift</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source</div>
+    <code>audits/2026-07-28-clean-architecture-audit.md</code> — section 2 (points #3, #6, #7) et section 3.1 — l'audit qui motive cette leçon et les suivantes de cet arc.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi est-ce un problème que <code>Playlist</code> importe SwiftUI ?</p>
+    <label><input type="radio" name="q1" value="a"> SwiftUI ralentit la compilation de tous les fichiers du module</label>
+    <label><input type="radio" name="q1" value="b"> Ça couple une entité métier à un framework d'UI, freinant test et réutilisation</label>
+    <label><input type="radio" name="q1" value="c"> Un type Identifiable ne peut techniquement pas importer SwiftUI</label>
+    <label><input type="radio" name="q1" value="d"> Color n'existe que dans les cibles d'application, jamais dans un module</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Quel est le sens de dépendance correct entre la couche Data et la couche Domain ?</p>
+    <label><input type="radio" name="q2" value="a"> Aucun sens n'est imposé, les deux couches peuvent dépendre l'une de l'autre</label>
+    <label><input type="radio" name="q2" value="b"> Domain doit dépendre de Data, jamais l'inverse</label>
+    <label><input type="radio" name="q2" value="c"> Seule la couche Presentation peut dépendre de Data ou de Domain</label>
+    <label><input type="radio" name="q2" value="d"> Data peut dépendre de Domain, jamais l'inverse</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">3. Pourquoi <code>PlaylistCard</code> et <code>PlaylistCoverHeader</code> ne changent-ils aucune ligne de code ?</p>
+    <label><input type="radio" name="q3" value="a"> Ces deux vues n'affichaient déjà aucune couleur avant ce changement</label>
+    <label><input type="radio" name="q3" value="b"> FactoryKit résout automatiquement gradientColors à leur place</label>
+    <label><input type="radio" name="q3" value="c"> gradientColors reste une propriété calculée lisible pareil, juste déplacée</label>
+    <label><input type="radio" name="q3" value="d"> Ces deux fichiers ont été supprimés puis recréés à l'identique</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. Pourquoi le switch sur <code>title</code> dans <code>gradientColors</code> est-il qualifié de compromis, pas de bonne pratique ?</p>
+    <label><input type="radio" name="q4" value="a"> Une faute de frappe dans un titre tombe silencieusement dans le cas par défaut</label>
+    <label><input type="radio" name="q4" value="b"> Un switch sur une chaîne de caractères ne compile pas en Swift 6</label>
+    <label><input type="radio" name="q4" value="c"> Cela empêche définitivement d'ajouter une quatrième playlist mock</label>
+    <label><input type="radio" name="q4" value="d"> LinearGradient n'accepte pas de couleurs choisies dynamiquement</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Une erreur "Cannot find type X in scope" apparaît après un déplacement de fichier ? Vérifie dans Xcode que le fichier est bien rattaché à la cible Karamock (File Inspector → Target Membership) — un glisser-déposer dans le Navigator ne suffit pas toujours à lui seul.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0023-gestion-erreurs-typees.html">← Leçon 23 : la gestion des erreurs typées</a></span>
+    <span>Leçon suivante : inverser la dépendance sur les protocoles (Domain/Interfaces)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
