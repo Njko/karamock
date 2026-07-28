@@ -42,10 +42,7 @@ struct MiniPlayerBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
         }
-        .padding(10)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 16)
         .contentShape(Rectangle())
         .onTapGesture {
             player.isExpanded = true
