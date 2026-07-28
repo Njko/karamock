@@ -8,9 +8,13 @@
 import FactoryKit
 
 extension Container {
-    @MainActor
-    var player: Factory<PlayerState> {
-        self { PlayerState() }
+    // Data
+    var lyricsFetching: Factory<LyricsFetching> {
+        self { URLSessionLyricsFetching() }
+    }
+    
+    var lyricsRepository: Factory<LyricsRepository> {
+        self { CachedLyricsRepository(service: self.lyricsFetching()) }
             .singleton
     }
     
@@ -19,6 +23,11 @@ extension Container {
             .singleton
     }
 
+    // Domain
+    var fetchLyrics: Factory<FetchLyricsUseCase> {
+        self { FetchLyricsUseCase(repository: self.lyricsRepository()) }
+    }
+    
     var downloadSong: Factory<DownloadSongUseCase> {
         self { DownloadSongUseCase(service: MockSongDownloading(), repository: self.downloadedSongsRepository()) }
     }
@@ -27,6 +36,18 @@ extension Container {
         self { FetchDownloadedSongsUseCase(repository: self.downloadedSongsRepository()) }
     }
     
+    // UI
+    @MainActor
+    var player: Factory<PlayerState> {
+        self { PlayerState() }
+            .singleton
+    }
+    
+    @MainActor
+    var fullScreenPlayerViewModel: ParameterFactory<Song, FullScreenPlayerViewModel> {
+        self { song in FullScreenPlayerViewModel(song: song, fetchLyrics: self.fetchLyrics()) }
+    }
+
     @MainActor
     var libraryViewModel : Factory<LibraryViewModel> {
         self { LibraryViewModel(fetchDownloadedSongs: self.fetchDownloadedSongs()) }

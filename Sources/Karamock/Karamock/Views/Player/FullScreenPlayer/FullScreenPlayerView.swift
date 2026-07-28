@@ -10,12 +10,12 @@ import SwiftUI
 import Combine
 
 struct FullScreenPlayerView: View {
-    @Injected(\.player) private var player
-    @Environment(\.dismiss) private var dismiss
-    
     let song: Song
     
+    @Injected(\.player) private var player
+    @Environment(\.dismiss) private var dismiss
     @ScaledMetric(relativeTo: .largeTitle) private var playButtonSize: CGFloat = 64
+    @State private var viewModel: FullScreenPlayerViewModel?
     @State private var progress: TimeInterval = 0
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
@@ -30,7 +30,7 @@ struct FullScreenPlayerView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityLabel("Fermer")
             
-            LyricsView(lyrics: mockLyrics, currentTime: progress)
+            LyricsView(lyrics: viewModel?.lyrics ?? mockLyrics, currentTime: progress)
                 .frame(height:160)
             
             VStack(spacing: 4) {
@@ -75,6 +75,11 @@ struct FullScreenPlayerView: View {
         .onReceive(timer) { _ in
             guard player.isPlaying, progress < song.durationInSeconds else { return }
             progress += 0.5
+        }
+        .task(id: song.id) {
+            let viewModel = Container.shared.fullScreenPlayerViewModel(song)
+            self.viewModel = viewModel
+            await viewModel.loadLyrics()
         }
     }
 }
