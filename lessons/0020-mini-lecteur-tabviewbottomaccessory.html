@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 20 — Le mini-lecteur qui cache le dernier élément</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 20 · Interface (2/N)</p>
+  <h1>Le mini-lecteur qui cache le dernier élément de la liste</h1>
+  <p class="subtitle">Tu as repéré un vrai bug en testant : quand une chanson joue en arrière-plan, le mini-lecteur flotte au-dessus de l'onglet actif — y compris au-dessus de <code>PlaylistDetailView</code>. Le dernier <code>SongRow</code> de la liste se retrouve masqué derrière lui, sans pouvoir être vu ni touché en entier. Ce n'est pas un problème propre à cet écran : c'est la façon dont le mini-lecteur est positionné aujourd'hui qui est en cause.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> encore une fois, ce n'est pas un sujet planifié — tu l'as trouvé en utilisant l'app comme le ferait un vrai utilisateur qui reprend une lecture en cours. C'est exactement le genre de détail qu'un test superficiel (regarder l'écran une fois, sans scroller jusqu'au bout) laisse passer, et que la mission demande de traiter avec le même sérieux qu'un vrai correctif produit.
+  </div>
+
+  <h2>La cause : un overlay ne réserve pas de place</h2>
+  <p><code>RootTabView</code> affiche le mini-lecteur avec <code>.overlay(alignment: .bottom)</code>, posé sur l'ensemble du <code>TabView</code> :</p>
+  <pre><code>TabView {
+    DiscoveryView()
+        .tabItem { Label("Découvrir", systemImage: "book.closed.fill") }
+    LibraryView()
+        .tabItem { Label("Bibliothèque", systemImage: "music.note.list") }
+}
+.overlay(alignment: .bottom) {
+    if let song = player.currentSong, !player.isExpanded {
+        MiniPlayerBar(song: song)
+            .padding(.bottom, 49)
+    }
+}</code></pre>
+  <p><code>.overlay</code> dessine simplement une vue par-dessus une autre, sans toucher à la mise en page de ce qu'il y a dessous. Le <code>49</code> en dur dans <code>.padding(.bottom, 49)</code> est une estimation de la hauteur de la barre d'onglets, ajoutée à la main pour que le mini-lecteur flotte juste au-dessus d'elle plutôt que par-dessus. Mais le <code>ScrollView</code> de <code>PlaylistDetailView</code> (ou n'importe quel écran contenu dans un onglet) n'a aucune idée que ce mini-lecteur existe : il continue de calculer sa zone de défilement comme si toute la hauteur de l'écran lui était disponible, jusqu'à la barre d'onglets. Le dernier élément se retrouve donc physiquement sous le mini-lecteur.</p>
+
+  <h2>Le correctif : l'accessoire natif du TabView</h2>
+  <p>Depuis iOS 26, SwiftUI propose un modificateur pensé précisément pour ce cas — un mini-lecteur audio flottant au-dessus de la barre d'onglets, exactement comme celui d'Apple Music : <code>.tabViewBottomAccessory</code>.</p>
+  <pre><code>TabView {
+    DiscoveryView()
+        .tabItem { Label("Découvrir", systemImage: "book.closed.fill") }
+    LibraryView()
+        .tabItem { Label("Bibliothèque", systemImage: "music.note.list") }
+}
+.tabViewBottomAccessory(isEnabled: player.currentSong != nil && !player.isExpanded) {
+    if let song = player.currentSong {
+        MiniPlayerBar(song: song)
+    }
+}
+.fullScreenCover(isPresented: $player.isExpanded) {
+    if let song = player.currentSong {
+        FullScreenPlayerView(song: song)
+    }
+}</code></pre>
+  <p>La différence n'est pas cosmétique : l'accessoire n'est pas une vue dessinée par-dessus le contenu, c'est une zone à part entière du <code>TabView</code>, gérée nativement à côté de la barre d'onglets. Le contenu de chaque onglet — y compris un écran poussé par <code>navigationDestination</code> comme <code>PlaylistDetailView</code> — voit automatiquement sa zone sûre réduite en conséquence, sans qu'aucun écran individuel n'ait besoin de connaître la hauteur du mini-lecteur. Le <code>.padding(.bottom, 49)</code> disparaît : ce n'est plus une estimation à maintenir à la main.</p>
+
+  <h2>Le piège : masquer le contenu ne suffit pas</h2>
+  <p>Une première version de cette leçon utilisait <code>.tabViewBottomAccessory { if let song = … { MiniPlayerBar(…) } }</code> sans le paramètre <code>isEnabled</code> — en ne conditionnant que le <em>contenu</em>, pas l'accessoire lui-même. C'est exactement le piège que tu as repéré en testant : quand <code>currentSong</code> devient <code>nil</code>, le contenu disparaît, mais l'accessoire continue d'exister comme zone vide au-dessus de la barre d'onglets, puisque le <code>TabView</code> ne sait pas qu'il doit arrêter de lui réserver de la place.</p>
+  <p>Le paramètre <code>isEnabled</code> de <code>tabViewBottomAccessory(isEnabled:content:)</code> résout précisément ce cas : il dit explicitement au <code>TabView</code> de retirer l'accessoire de la mise en page, pas seulement de vider son contenu. C'est un paramètre récent (ajouté en iOS 26.2, après que ce problème a été signalé comme comportement non voulu sur les forums développeurs Apple) — comme le projet cible iOS 26.5, il est disponible sans condition de compatibilité à gérer.</p>
+
+  <h2>Le mini-lecteur a changé de contenant : le fond gris tronqué</h2>
+  <p>Ce que l'aside précédente laissait en suspens, tu l'as vu à l'écran : un fond gris, partiellement coupé sur les bords. La cause est exactement celle annoncée — <code>MiniPlayerBar</code> pose son propre fond, pensé pour l'ancien <code>.overlay</code> flottant :</p>
+  <pre><code>HStack(spacing: 12) {
+    // pochette, titre/artiste, bouton play/pause
+}
+.padding(10)
+.background(.regularMaterial)
+.clipShape(RoundedRectangle(cornerRadius: 10))
+.padding(.horizontal, 8)
+.contentShape(Rectangle())
+.onTapGesture { player.isExpanded = true }</code></pre>
+  <p>L'accessoire du <code>TabView</code> applique déjà, de son côté, son propre fond "Liquid Glass" en forme de capsule autour de tout ce que tu lui donnes. Les deux fonds se superposent désormais : le rectangle arrondi de <code>MiniPlayerBar</code> (dimensionné pour flotter seul) dépasse ou se fait couper par le masque en capsule de l'accessoire, d'où le bord gris tronqué que tu observes. La documentation officielle est explicite sur ce point — dans la session WWDC25 <em>Build a SwiftUI app with the new design</em> : le contenu placé dans l'accessoire "obtient automatiquement un fond Liquid Glass en capsule", et si l'app a "des fonds ou effets d'assombrissement supplémentaires derrière les éléments de la barre", il faut les retirer, car ils interfèrent avec cet effet.</p>
+  <p>Le restylage : ne garder que la mise en page du contenu, laisser l'accessoire fournir le fond.</p>
+  <pre><code>var body: some View {
+    HStack(spacing: 12) {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(.quaternary)
+            .frame(width: 40, height: 40)
+            .accessibilityHidden(true)
+
+        VStack(alignment: .leading, spacing: 2) {
+            Text(song.title).font(.subheadline.bold())
+            Text(song.artist).font(.caption).foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { player.isExpanded = true }
+
+        Spacer()
+
+        Button {
+            player.isPlaying.toggle()
+        } label: {
+            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                .font(.title3)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
+    }
+    .padding(.horizontal, 16)
+    .contentShape(Rectangle())
+    .onTapGesture { player.isExpanded = true }
+}</code></pre>
+  <p><code>.background(.regularMaterial)</code>, <code>.clipShape(RoundedRectangle(cornerRadius: 10))</code> et le <code>.padding(10)</code>/<code>.padding(.horizontal, 8)</code> pensés pour un fond propre disparaissent : c'est l'accessoire qui dessine désormais la capsule, ses marges internes, et son matériau translucide. Il ne reste qu'un <code>.padding(.horizontal, 16)</code> pour éviter que la pochette et le bouton touchent le bord de la capsule — une valeur de départ à ajuster à l'œil une fois testée sur ton appareil.</p>
+
+  <details class="aside">
+    <summary>Pour aller plus loin : le mini-lecteur en version compacte</summary>
+    <p>Quand la barre d'onglets se réduit pendant un scroll, l'accessoire passe lui aussi dans un état compact ("inline"), fusionné dans la barre au lieu de flotter au-dessus. SwiftUI expose cet état via l'environnement : <code>@Environment(\.tabViewBottomAccessoryPlacement) private var placement</code>, avec les valeurs <code>.inline</code>, <code>.expanded</code>, ou <code>nil</code>. Le contenu actuel de <code>MiniPlayerBar</code> (pochette + titre + artiste + bouton) est pensé pour l'état <code>.expanded</code> — dans l'état <code>.inline</code>, plus étroit, il vaudrait la peine de basculer vers un contenu réduit (par exemple juste le bouton play/pause). Volontairement laissé de côté ici : la correction du fond tronqué ne dépend pas de ce raffinement.</p>
+  </details>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>.overlay(alignment: .bottom)</code> — dessine par-dessus, sans réserver de place</td><td><code>.tabViewBottomAccessory</code> — zone native du TabView, réserve réellement l'espace</td></tr>
+    <tr><td><code>.padding(.bottom, 49)</code> — hauteur de la barre d'onglets estimée à la main</td><td>Positionnement automatique, aucune estimation à maintenir</td></tr>
+    <tr><td>Dernier élément de toute liste sous un onglet potentiellement masqué</td><td>Chaque écran d'onglet voit sa zone sûre réduite automatiquement</td></tr>
+    <tr><td>Contenu conditionnel seul — l'accessoire reste réservé même vide</td><td><code>isEnabled</code> retire réellement l'accessoire de la mise en page</td></tr>
+    <tr><td>MiniPlayerBar pose son propre fond gris, tronqué par la capsule de l'accessoire</td><td>Seule la mise en page reste ; l'accessoire fournit son propre fond Liquid Glass</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Sources primaires recommandées</div>
+    <a href="https://www.createwithswift.com/enhancing-the-tab-bar-with-a-bottom-accessory/">Enhancing the tab bar with a bottom accessory</a> (createwithswift.com) — signature et exemple complet de <code>tabViewBottomAccessory</code>, y compris ses limites connues.<br>
+    <a href="https://developer.apple.com/forums/thread/803428">'tabViewBottomAccessory' leaves an empty accessory area when conditionally hidden</a> (Apple Developer Forums) — le rapport de bug à l'origine de l'ajout du paramètre <code>isEnabled</code>.<br>
+    <a href="https://stuartbreckenridge.net/changes-to-tabviewbottomaccessory-in-ios-26-1/">Changes to tabViewBottomAccessory in iOS 26.1 are Fixed in iOS 26.2</a> (stuartbreckenridge.net) — confirme que <code>isEnabled</code> est la solution officielle, disponible et fiable depuis iOS 26.2.<br>
+    <a href="https://developer.apple.com/videos/play/wwdc2025/323/">Build a SwiftUI app with the new design</a> (WWDC25, Apple) — la source de la consigne "ne pose pas ton propre fond, l'accessoire s'en charge", et de l'existence de <code>tabViewBottomAccessoryPlacement</code>.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi le dernier <code>SongRow</code> était-il caché derrière le mini-lecteur avec l'ancienne approche <code>.overlay</code> ?</p>
+    <label><input type="radio" name="q1" value="a"> SongRow utilisait une taille de police fixe qui débordait de son cadre</label>
+    <label><input type="radio" name="q1" value="b"> Le ScrollView ne savait pas qu'un overlay occupait de l'espace en bas de l'écran</label>
+    <label><input type="radio" name="q1" value="c"> PlaylistDetailView n'utilisait pas encore de ScrollView à ce moment-là</label>
+    <label><input type="radio" name="q1" value="d"> Le mini-lecteur était affiché deux fois à cause d'un bug de Factory</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. En quoi <code>.tabViewBottomAccessory</code> diffère-t-il fondamentalement de <code>.overlay(alignment: .bottom)</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> Il n'accepte que du texte simple, pas une vue personnalisée comme MiniPlayerBar</label>
+    <label><input type="radio" name="q2" value="b"> Il ne fonctionne qu'avec la syntaxe Tab(), jamais avec .tabItem existant</label>
+    <label><input type="radio" name="q2" value="c"> Il désactive complètement le geste de swipe entre les onglets</label>
+    <label><input type="radio" name="q2" value="d"> Il fait partie de la mise en page réelle du TabView, pas juste un dessin par-dessus</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi le <code>.padding(.bottom, 49)</code> disparaît-il dans la version corrigée ?</p>
+    <label><input type="radio" name="q3" value="a"> Le positionnement au-dessus de la barre d'onglets est géré nativement par le système</label>
+    <label><input type="radio" name="q3" value="b"> La barre d'onglets elle-même a été supprimée dans cette correction</label>
+    <label><input type="radio" name="q3" value="c"> MiniPlayerBar calcule désormais sa propre position avec GeometryReader</label>
+    <label><input type="radio" name="q3" value="d"> 49 points n'était de toute façon jamais la bonne valeur sur cet écran</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">4. Pourquoi <code>if let song = player.currentSong { MiniPlayerBar(…) }</code> seul, sans <code>isEnabled</code>, ne suffisait pas à faire disparaître complètement l'accessoire ?</p>
+    <label><input type="radio" name="q4" value="a"> Parce que MiniPlayerBar ignore la valeur nil et s'affiche quand même vide</label>
+    <label><input type="radio" name="q4" value="b"> Parce que currentSong ne devient jamais réellement nil dans ce projet</label>
+    <label><input type="radio" name="q4" value="c"> Parce que vider le contenu ne retire pas la zone que le TabView réserve à l'accessoire</label>
+    <label><input type="radio" name="q4" value="d"> Parce que isExpanded doit être vérifié avant currentSong, pas après</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">5. Pourquoi retirer <code>.background(.regularMaterial)</code> et <code>.clipShape(...)</code> de MiniPlayerBar une fois placé dans l'accessoire ?</p>
+    <label><input type="radio" name="q5" value="a"> Parce que .regularMaterial a été officiellement retiré du SDK iOS 26</label>
+    <label><input type="radio" name="q5" value="b"> Parce que l'accessoire applique déjà un fond Liquid Glass en capsule</label>
+    <label><input type="radio" name="q5" value="c"> Parce que Button perd son geste tactile sous un fond personnalisé</label>
+    <label><input type="radio" name="q5" value="d"> Parce que clipShape ralentit fortement le défilement des listes longues</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Tu veux voir à quoi ressemblerait une version compacte de MiniPlayerBar pour l'état <code>.inline</code> de l'accessoire ? Demande à ton agent de proposer une mise en page réduite basée sur <code>tabViewBottomAccessoryPlacement</code>.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0019-concurrence-nonisolated-actor.html">← Leçon 19 : nonisolated, actor, et l'isolation par défaut</a></span>
+    <span>Leçon suivante : à définir</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
