@@ -24,6 +24,7 @@ struct RootTabView: View {
                     Label("Bibliothèque", systemImage: "music.note.list")
                 }
         }
+        .tabBarMinimizeBehavior(.onScrollDown)
         .tabViewBottomAccessory(isEnabled: player.currentSong != nil && !player.isExpanded) {
             if let song = player.currentSong, !player.isExpanded {
                 MiniPlayerBar(song: song)

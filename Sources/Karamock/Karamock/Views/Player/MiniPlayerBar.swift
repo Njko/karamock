@@ -11,10 +11,35 @@ import SwiftUI
 struct MiniPlayerBar: View {
     
     @Injected(\.player) private var player
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
     
     let song: Song
     
     var body: some View {
+        Group {
+            if placement == .inline {
+                compactContent
+            } else {
+                expandedContent
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            player.isExpanded = true
+        }
+    }
+    
+    private var compactContent: some View {
+        Button {
+            player.isPlaying.toggle()
+        } label: {
+            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").font(.title3)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
+    }
+    
+    private var expandedContent: some View {
         HStack(spacing:12) {
             RoundedRectangle(cornerRadius: 6)
                 .fill(.quaternary)
@@ -43,9 +68,5 @@ struct MiniPlayerBar: View {
             .accessibilityLabel(player.isPlaying ? "Mettre en pause" : "Lire")
         }
         .padding(.horizontal, 16)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            player.isExpanded = true
-        }
     }
 }
