@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 23 — Gestion des erreurs : un type dédié plutôt qu'un catch générique</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 23 · Gestion des erreurs (1/N)</p>
+  <h1>Un type d'erreur dédié, plutôt qu'un catch générique</h1>
+  <p class="subtitle">La Leçon 22 a délibérément laissé la gestion d'erreur sommaire : un seul <code>catch</code>, un seul message, quelle que soit la cause. C'était honnête pour une leçon centrée sur URLSession — mais la Leçon 22 se terminait justement en annonçant que ce n'était "pas ce qu'on ferait dans une app industrielle". Voici pourquoi, et comment le corriger proprement sur <code>FetchLyricsUseCase</code>.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> un poste Swift/Apple Platforms senior suppose de savoir <em>modéliser</em> les erreurs, pas seulement les attraper — distinguer ce qui est attendu (une chanson sans paroles) de ce qui ne l'est pas (une panne réseau, une réponse qu'on ne sait plus décoder), décider quoi montrer à l'utilisateur et quoi journaliser pour soi-même. C'est une compétence transversale à toute l'architecture déjà posée (Leçons 6-12) et à la Leçon 22 qui vient de l'exposer concrètement.
+  </div>
+
+  <h2>Aujourd'hui : un seul symptôme pour trois causes très différentes</h2>
+  <p>Le code actuel de <code>FullScreenPlayerViewModel.loadLyrics()</code> (Leçon 22) :</p>
+  <pre><code>func loadLyrics() async {
+    do {
+        lyrics = try await fetchLyrics(for: song)
+    } catch {
+        lyrics = [LyricsLine(time: 0, text: "Paroles indisponibles pour le moment.")]
+    }
+}</code></pre>
+  <p>Trois situations bien distinctes finissent pourtant dans la même case <code>catch</code>, avec le même message :</p>
+  <ul>
+    <li><strong>La chanson n'a simplement pas de paroles sur lyrics.ovh</strong> (l'API répond 404) — attendu, pas un bug, rien à corriger côté app.</li>
+    <li><strong>Le réseau est indisponible</strong> — transitoire, l'utilisateur pourrait réessayer dans quelques instants.</li>
+    <li><strong>La réponse ne correspond plus à ce que le code attend</strong> (JSON malformé, URL invalide) — un vrai problème, potentiellement une régression de l'API ou un bug côté app, qui mérite d'être investigué.</li>
+  </ul>
+  <p>Aplatir les trois dans un seul message générique coûte deux fois : l'utilisateur ne sait jamais si réessayer a un sens, et le développeur perd toute visibilité sur le troisième cas — celui qui, contrairement aux deux autres, signale vraiment quelque chose à corriger.</p>
+
+  <h2>Modéliser l'erreur : un type dédié plutôt qu'<code>Error</code> générique</h2>
+  <p>Swift 6 permet de déclarer précisément <em>quel</em> type d'erreur une fonction peut lancer, via les <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0413-typed-throws.md">"typed throws"</a> (SE-0413) : <code>throws(MonType)</code> au lieu de <code>throws</code>. La fonction ne peut alors lancer que des instances de ce type précis, et le <code>catch</code> qui la reçoit connaît déjà son type concret — sans <code>as?</code> ni caste.</p>
+  <pre><code>enum LyricsError: Error, Sendable {
+    case invalidURL
+    case notFound
+    case network
+    case malformedResponse
+}</code></pre>
+  <p>Volontairement, aucun cas n'embarque l'erreur technique d'origine (<code>URLError</code>, <code>DecodingError</code>…) — ce type ne sert qu'à décider quoi <em>montrer</em> et quoi <em>journaliser</em>, pas à transporter un diagnostic complet à travers toutes les couches. Le détail technique est journalisé au plus près de sa source (section suivante), là où il est encore riche de sens — pas remonté artificiellement jusqu'au ViewModel. Ce type vit dans <code>Services/LyricsError.swift</code> : bien qu'utilisé par le Repository, le UseCase et le ViewModel aussi, c'est le Service qui en a la connaissance la plus intime (c'est lui qui interprète le contrat HTTP ci-dessous), donc c'est un choix de rangement défendable — pas une obligation.</p>
+
+  <h2>Le service : interpréter le contrat HTTP, pas seulement décoder le JSON</h2>
+  <p>Le code de la Leçon 22 ignorait le code HTTP retourné par lyrics.ovh — un 404 traversait <code>URLSession.shared.data(from:)</code> sans lever la moindre erreur, et ne finissait en échec qu'indirectement, au moment du décodage JSON (le corps <code>{"error": "No lyrics found"}</code> ne correspond pas à <code>LyricsResponse</code>). Ça fonctionnait par accident. Le Service est le seul endroit qui connaît le contrat exact de cette API — c'est donc lui qui doit l'interpréter explicitement :</p>
+  <pre><code>import Foundation
+import os
+
+protocol LyricsFetching: Sendable {
+    func fetchLyrics(artist: String, title: String) async throws(LyricsError) -> String
+}
+
+private let lyricsFetcherLogger = Logger(subsystem: "fr.nicolaslinard.karamock", category: "Lyrics")
+
+struct URLSessionLyricsFetching: LyricsFetching {
+    func fetchLyrics(artist: String, title: String) async throws(LyricsError) -> String {
+        guard let url = lyricsURL(artist: artist, title: title) else {
+            throw .invalidURL
+        }
+
+        let data: Data
+        let response: URLResponse
+
+        do {
+            (data, response) = try await URLSession.shared.data(from: url)
+        } catch {
+            lyricsFetcherLogger.error("Echec reseau lyrics.ovh : \(error)")
+            throw .network
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw .malformedResponse
+        }
+
+        if httpResponse.statusCode == 404 {
+            throw .notFound
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            lyricsFetcherLogger.error("Statut HTTP inattendu de lyrics.ovh: \(httpResponse)")
+            throw .network
+        }
+
+        do {
+            return try JSONDecoder().decode(LyricsResponse.self, from: data).lyrics
+        } catch {
+            lyricsFetcherLogger.error("Reponse lyrics.ovh non decodable: \(error)")
+            throw .malformedResponse
+        }
+    }
+}</code></pre>
+  <p>Le protocole lui-même déclare désormais <code>throws(LyricsError)</code>, pas seulement l'implémentation. <code>throw .invalidURL</code>, <code>throw .notFound</code> : la syntaxe abrégée du <code>throw</code> fonctionne comme <code>return .someCase</code>, parce que le type attendu (<code>LyricsError</code>) est déjà connu de la signature de la fonction. Remarque au passage : les messages passés à <code>Logger</code> ci-dessus évitent les accents — un choix qui n'a rien d'obligatoire techniquement, mais que tu retrouveras si tu compares avec ton propre fichier.</p>
+
+  <details class="aside">
+    <summary>Pourquoi journaliser ici, et pas plus haut dans le Repository ou le ViewModel ?</summary>
+    <p>Au moment où l'erreur technique est capturée (<code>URLError</code>, code HTTP, <code>DecodingError</code>), on a le maximum de détail disponible. Une fois convertie en <code>LyricsError.network</code> ou <code>.malformedResponse</code>, cette information est perdue — remonter l'erreur d'origine à travers Repository/UseCase/ViewModel juste pour la journaliser plus tard reviendrait à complexifier tout le chemin pour un seul appel à <code>logger.error</code>. Journaliser au plus près de la source, puis ne remonter qu'un type d'erreur propre et minimal : c'est le compromis qui coûte le moins cher en couches traversées.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Pourquoi <code>.notFound</code> n'est jamais journalisé</summary>
+    <p>Un 404 de lyrics.ovh, ici, ne signale pas une panne : il dit juste "cette chanson n'a pas de paroles chez nous", une réponse parfaitement normale de l'API. La journaliser produirait du bruit dans les logs pour un cas qui n'a jamais besoin d'être investigué. Une bonne règle générale : ne journaliser que ce qui, en le relisant plus tard, pourrait légitimement déclencher une action — pas tout ce qui n'est pas un succès.</p>
+  </details>
+
+  <h2>Propager le type d'erreur : Repository et UseCase</h2>
+  <p>Chaque couche qui relaie l'appel change sa signature de <code>throws</code> à <code>throws(LyricsError)</code>, sans rien changer d'autre :</p>
+  <pre><code>nonisolated protocol LyricsRepository: Sendable {
+    func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine]
+}
+
+actor CachedLyricsRepository: LyricsRepository {
+    private let service: LyricsFetching
+    private var cache: [Song.ID: [LyricsLine]] = [:]
+
+    init(service: LyricsFetching) {
+        self.service = service
+    }
+
+    func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine] {
+        if let cached = cache[song.id] { return cached }
+
+        let rawText = try await service.fetchLyrics(artist: song.artist, title: song.title)
+        let lines = rawText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard !lines.isEmpty else { return [] }
+        let interval = song.durationInSeconds / Double(lines.count)
+        let result = lines.enumerated().map { index, text in
+            LyricsLine(time: Double(index) * interval, text: text)
+        }
+
+        cache[song.id] = result
+        return result
+    }
+}
+
+struct FetchLyricsUseCase: Sendable {
+    let repository: LyricsRepository
+
+    nonisolated init(repository: LyricsRepository) {
+        self.repository = repository
+    }
+
+    func callAsFunction(for song: Song) async throws(LyricsError) -> [LyricsLine] {
+        try await repository.lyrics(for: song)
+    }
+}</code></pre>
+  <p><code>try await service.fetchLyrics(...)</code> compile sans rien ajouter : le Repository déclare le même <code>throws(LyricsError)</code> que le Service qu'il appelle, donc l'erreur traverse la frontière sans conversion. Si un jour un second Service (une autre API de paroles, par exemple) lançait un type d'erreur différent, le compilateur le signalerait immédiatement à cet endroit précis — impossible de l'oublier silencieusement.</p>
+
+  <h2>Le ViewModel : trois réponses différentes pour trois causes différentes</h2>
+  <pre><code>func loadLyrics() async {
+    do throws(LyricsError) {
+        lyrics = try await fetchLyrics(for: song)
+    } catch {
+        switch error {
+        case .notFound:
+            lyrics = [LyricsLine(time: 0, text: "Paroles indisponibles pour cette chanson.")]
+        case .network:
+            lyrics = [LyricsLine(time: 0, text: "Connexion impossible. Réessayez")]
+        case .invalidURL, .malformedResponse:
+            lyrics = [LyricsLine(time: 0, text: "Paroles indisponibles pour le moment.")]
+        }
+    }
+}</code></pre>
+  <p>Dans la case <code>catch</code>, <code>error</code> est déjà connu comme un <code>LyricsError</code> concret — le <code>switch</code> qui suit porte directement sur ses cas, sans caste. Trois messages désormais, pas un seul : un pour la chanson sans paroles (rien à faire), un pour l'échec réseau (un réessai a du sens), et un message générique de repli pour les deux cas vraiment inattendus. Si <code>LyricsError</code> gagne un jour un nouveau cas, ce <code>switch</code> ne compile plus tant qu'il n'a pas été mis à jour — le compilateur empêche qu'un nouveau mode d'échec passe inaperçu.</p>
+
+  <details class="aside">
+    <summary>Le <code>catch</code> ci-dessus doit rester inconditionnel pour être exhaustif</summary>
+    <p>D'après la proposition SE-0413 elle-même : seul un <code>catch</code> sans condition (comme celui-ci, qui capture tout <code>LyricsError</code> dans <code>error</code>) rend le <code>do...catch</code> exhaustif — un <code>catch let error as LyricsError</code> ne suffirait pas, même en couvrant tous les cas connus. C'est le <code>switch</code> à l'intérieur du <code>catch</code>, pas le <code>catch</code> lui-même, qui doit énumérer tous les cas de l'enum.</p>
+  </details>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Ouvre "Bohemian Rhapsody" de Queen (playlist "Best Of Rock") : toujours un succès identique à la Leçon 22, aucune régression.</li>
+      <li>Ouvre une chanson dont l'association artiste/titre est peu probable sur lyrics.ovh : le message doit maintenant être <em>"Paroles indisponibles pour cette chanson."</em> — différent de celui d'avant.</li>
+      <li>Coupe le Wi-Fi/les données, puis ouvre une chanson jamais mise en cache : le message doit être <em>"Connexion impossible. Réessayez"</em> — visiblement différent du précédent, alors que les deux affichaient exactement le même texte en Leçon 22.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant (Leçon 22)</th><th>Après</th></tr>
+    <tr><td>Un seul <code>catch</code> générique, un seul message</td><td><code>LyricsError</code> typé, trois messages distincts selon la cause</td></tr>
+    <tr><td>Code HTTP 404 ignoré, détecté par accident au décodage JSON</td><td>Code HTTP interprété explicitement dans le Service</td></tr>
+    <tr><td>Aucune journalisation nulle part</td><td><code>Logger</code> (os) au plus près de la source, uniquement pour les cas vraiment inattendus</td></tr>
+    <tr><td><code>throws</code> non typé sur toute la chaîne</td><td><code>throws(LyricsError)</code> de bout en bout, Service → Repository → UseCase</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Sources primaires recommandées</div>
+    <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0413-typed-throws.md">SE-0413 — Typed throws</a> (Swift Evolution) — la proposition qui introduit <code>throws(ErrorType)</code>, l'exhaustivité des <code>catch</code>, et la syntaxe abrégée du <code>throw</code>.<br>
+    <a href="https://developer.apple.com/documentation/os/logger">Logger</a> (Apple Developer Documentation) — l'API de journalisation unifiée utilisée ici.<br>
+    <a href="0022-reseau-urlsession-lyrics-ovh.html">Leçon 22</a> — le code d'origine que cette leçon corrige.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi le catch générique unique de la Leçon 22 pose-t-il problème dans une app industrielle ?</p>
+    <label><input type="radio" name="q1" value="a"> Il empêche totalement l'application de compiler en mode strict</label>
+    <label><input type="radio" name="q1" value="b"> Il ralentit sensiblement le temps de réponse de l'appel réseau</label>
+    <label><input type="radio" name="q1" value="c"> Il traite un cas attendu et un vrai bug avec le même message</label>
+    <label><input type="radio" name="q1" value="d"> Il empêche complètement JSONDecoder de fonctionner correctement</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">2. Que garantit <code>throws(LyricsError)</code> par rapport à un simple <code>throws</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> La fonction ne peut lancer que des LyricsError, connus sans caste au catch</label>
+    <label><input type="radio" name="q2" value="b"> La fonction devient automatiquement plus rapide à l'exécution</label>
+    <label><input type="radio" name="q2" value="c"> Il devient impossible d'utiliser await à l'intérieur de la fonction</label>
+    <label><input type="radio" name="q2" value="d"> Toute erreur non gérée est silencieusement ignorée par défaut</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi le code HTTP 404 est-il interprété dans le Service plutôt que dans le Repository ?</p>
+    <label><input type="radio" name="q3" value="a"> FactoryKit interdit techniquement d'y accéder ailleurs dans le projet</label>
+    <label><input type="radio" name="q3" value="b"> Le Repository ne peut structurellement pas lancer d'erreur typée</label>
+    <label><input type="radio" name="q3" value="c"> HTTPURLResponse n'existe que dans les types conformes à Sendable</label>
+    <label><input type="radio" name="q3" value="d"> C'est le Service qui connaît le contrat exact de l'API appelée</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">4. Pourquoi le cas <code>.notFound</code> n'est-il jamais passé à <code>logger.error</code> ?</p>
+    <label><input type="radio" name="q4" value="a"> Logger ne peut techniquement pas journaliser une valeur d'enum Swift</label>
+    <label><input type="radio" name="q4" value="b"> C'est une réponse normale de l'API, pas un problème à investiguer</label>
+    <label><input type="radio" name="q4" value="c"> Ce cas ne peut en réalité jamais être déclenché par lyrics.ovh</label>
+    <label><input type="radio" name="q4" value="d"> os.Logger est réservé exclusivement aux erreurs réseau critiques</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">5. Que se passe-t-il si un nouveau cas est ajouté à <code>LyricsError</code> sans toucher au <code>switch</code> du ViewModel ?</p>
+    <label><input type="radio" name="q5" value="a"> Le projet ne compile plus tant que le switch n'est pas mis à jour</label>
+    <label><input type="radio" name="q5" value="b"> Le nouveau cas est automatiquement traité comme .malformedResponse</label>
+    <label><input type="radio" name="q5" value="c"> SwiftUI affiche silencieusement un écran blanc à la place des paroles</label>
+    <label><input type="radio" name="q5" value="d"> L'application plante immédiatement au premier lancement suivant</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Une erreur de compilation apparaît sur throws(LyricsError) ou sur le switch exhaustif ? Colle le message exact à ton agent — ce sont des mécanismes récents (Swift 6.0), et le message du compilateur pointe généralement directement vers le cas manquant.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0022-reseau-urlsession-lyrics-ovh.html">← Leçon 22 : de vraies paroles avec URLSession</a></span>
+    <span>Leçon suivante : à définir</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
