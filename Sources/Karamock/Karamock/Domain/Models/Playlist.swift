@@ -6,11 +6,9 @@
 //
 
 import Foundation
-import SwiftUI
 
 struct Playlist: Identifiable, Hashable {
     let id = UUID()
     let title: String
-    let gradientColors: [Color]
     let songs: [Song]
 }

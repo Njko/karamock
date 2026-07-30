@@ -7,7 +7,7 @@
 import SwiftUI
 
 let mockPlaylist: [Playlist] = [
-    Playlist(title: "Best Of Rock", gradientColors: [.red, .orange], songs: [
+    Playlist(title: "Best Of Rock", songs: [
             Song(title: "Don't Stop Me Now", artist: "Queen", year: 1978, duration: "3:29", key: "F"),
             Song(title: "Sweet Child O' Mine", artist: "Guns N' Roses", year: 1987, duration: "5:56", key: "D"),
             Song(title: "Back In Black", artist: "AC/DC", year: 1980, duration: "4:15", key: "E"),
@@ -59,7 +59,7 @@ let mockPlaylist: [Playlist] = [
             Song(title: "Thunderstruck", artist: "AC/DC", year: 1990, duration: "4:52", key: "B"),
             Song(title: "Kashmir", artist: "Led Zeppelin", year: 1975, duration: "8:37", key: "D")
     ]),
-    Playlist(title: "Années 2000\nen France", gradientColors: [.blue, .green], songs: [
+    Playlist(title: "Années 2000\nen France", songs: [
             Song(title: "Jeune Demoiselle", artist: "Diam's", year: 2006, duration: "3:47", key: "Gm"),
             Song(title: "J'traine des pieds", artist: "Olivia Ruiz", year: 2005, duration: "3:36", key: "Am"),
             Song(title: "Le Vent Nous Portera", artist: "Noir Désir", year: 2001, duration: "4:44", key: "Bm"),
@@ -111,7 +111,7 @@ let mockPlaylist: [Playlist] = [
             Song(title: "Te quiero", artist: "Stromae", year: 2009, duration: "3:29", key: "Dm"),
             Song(title: "House'llelujah", artist: "Stromae", year: 2009, duration: "3:23", key: "Em")
     ]),
-    Playlist(title: "Karaoké\nClassics", gradientColors: [.yellow, .purple], songs: [
+    Playlist(title: "Karaoké\nClassics", songs: [
             Song(title: "I Will Survive", artist: "Gloria Gaynor", year: 1978, duration: "3:18", key: "Am"),
             Song(title: "Dancing Queen", artist: "ABBA", year: 1976, duration: "3:51", key: "A"),
             Song(title: "Take On Me", artist: "a-ha", year: 1984, duration: "3:46", key: "Bm"),
