@@ -16,7 +16,7 @@ actor CachedLyricsRepository: LyricsRepository {
     }
     
     func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine] {
-        if let cached = cache[song.id] {
+        if let cached = await cache[song.id] {
             return cached
         }
         
@@ -31,7 +31,7 @@ actor CachedLyricsRepository: LyricsRepository {
             LyricsLine(time: Double(index) * interval, text: text)
         }
         
-        cache[song.id] = result
+        await cache[song.id] = result
         return result
     }
 }

@@ -19,13 +19,17 @@ struct DownloadSongUseCase: Sendable {
     
     func callAsFunction(_ song: Song) -> AsyncStream<Double> {
         AsyncStream { continuation in
-            Task {
+            let task = Task {
                 for await progress in service.download(song) {
+                    guard !Task.isCancelled else { break }
                     continuation.yield(progress)
                 }
-                await repository.add(song)
+                if !Task.isCancelled {
+                    await repository.add(song)
+                }
                 continuation.finish()
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 }

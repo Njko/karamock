@@ -15,6 +15,8 @@ final class SongDownloadViewModel {
     private let song : Song
     private let downloadSong: DownloadSongUseCase
     
+    private var downloadTask: Task<Void, Never>?
+    
     init(
         song: Song,
         downloadSong: DownloadSongUseCase
@@ -26,11 +28,21 @@ final class SongDownloadViewModel {
     func startDownload() {
         guard state == .notDownloaded || state == .failed else { return }
         state = .downloading(progress: 0)
-        Task {
+        downloadTask = Task {
             for await progress in downloadSong(song) {
+                guard !Task.isCancelled else { return }
                 state = .downloading(progress: progress)
             }
+            guard !Task.isCancelled else { return }
             state = .downloaded
+            downloadTask = nil
         }
+    }
+    
+    func cancelDownload() {
+        guard case .downloading = state else { return }
+        downloadTask?.cancel()
+        downloadTask = nil
+        state = .notDownloaded
     }
 }

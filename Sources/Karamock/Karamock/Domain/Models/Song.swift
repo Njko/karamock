@@ -8,7 +8,7 @@
 import Foundation
 
 struct Song: Identifiable, Hashable {
-    let id = UUID()
+    var id : String { "\(artist.lowercased())-\(title.lowercased())" }
     let title: String
     let artist: String
     let year: Int

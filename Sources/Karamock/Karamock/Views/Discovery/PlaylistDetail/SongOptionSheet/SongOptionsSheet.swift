@@ -82,6 +82,9 @@ struct SongOptionsSheet: View {
             }
             .padding()
         }
+        .onDisappear {
+            downloadViewModel?.cancelDownload()
+        }
         .task {
             if downloadViewModel == nil {
                 downloadViewModel = Container.shared.songDownloadViewModel(song)
