@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 25 — Nettoyage : inverser la dépendance sur les protocoles</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 25 · Nettoyage architecture (2/N)</p>
+  <h1>Inverser la dépendance : les protocoles vivent dans Domain, pas dans Data</h1>
+  <p class="subtitle">La Leçon 24 a sorti les entités métier des dossiers <code>Views/</code>. L'audit signale un problème voisin, plus subtil : les <em>contrats</em> (<code>LyricsRepository</code>, <code>DownloadedSongsRepository</code>, <code>SongDownloading</code>, <code>LyricsFetching</code>) sont eux aussi déclarés hors du Domain — dans les fichiers mêmes de leurs implémentations. Cette leçon les en sort, sans changer un seul comportement.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> la mission voulait une architecture en couches "pour être capable de discuter de structuration d'app à un niveau Tech Lead". Le sujet ici a un nom précis en ingénierie logicielle — le Dependency Inversion Principle (le "D" de SOLID) — et c'est le genre de vocabulaire qu'on doit pouvoir relier à du code concret en entretien, pas seulement réciter.
+  </div>
+
+  <h2>Ce que l'audit a trouvé</h2>
+  <p>Point #4 de l'audit : <em>"<code>LyricsRepository</code>, <code>DownloadedSongsRepository</code>, <code>SongDownloading</code> sont définis dans les couches Data/Services. La couche Domain dépend d'eux sans les 'posséder' — violation directe du Dependency Inversion Principle."</em></p>
+  <pre><code>// ACTUEL (incorrect)
+Domain (UseCase) ──dépend de──▶ Data (protocole déclaré dans CachedLyricsRepository.swift)
+
+// CORRECT (Clean Architecture)
+Data (implémentation) ──implémente──▶ Domain/Interfaces (protocole)
+Domain (UseCase) ──dépend de──▶ Domain/Interfaces (protocole)</code></pre>
+  <p>Concrètement aujourd'hui : <code>FetchLyricsUseCase</code> (Domain) déclare <code>let repository: LyricsRepository</code> — mais pour savoir ce qu'est <code>LyricsRepository</code>, il faut aller lire <code>Repositories/CachedLyricsRepository.swift</code> (Data), qui contient le protocole <em>et</em> son unique implémentation dans le même fichier. Domain dépend d'un détail d'organisation de Data. Si Data réorganise ses fichiers, ou si une deuxième implémentation apparaît un jour (un <code>RemoteDownloadedSongsRepository</code>, par exemple), le contrat que Domain utilise reste accroché au hasard à l'une des deux — sans raison de principe pour ça.</p>
+  <p>Le Dependency Inversion Principle dit l'inverse : ni Domain ni Data ne devraient dépendre l'un de l'autre directement — les deux devraient dépendre d'une abstraction partagée. Ici, cette abstraction, c'est le protocole — et c'est Domain qui doit le posséder, parce que c'est Domain qui exprime le besoin métier ("j'ai besoin de récupérer des paroles"), pas Data qui décide comment le satisfaire.</p>
+
+  <h2>Quatre protocoles, un seul geste répété</h2>
+  <table class="compare-table">
+    <tr><th>Protocole</th><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>LyricsRepository</code></td><td><code>Repositories/CachedLyricsRepository.swift</code></td><td><code>Domain/Interfaces/LyricsRepository.swift</code></td></tr>
+    <tr><td><code>DownloadedSongsRepository</code></td><td><code>Repositories/DownloadedSongsRepository.swift</code></td><td><code>Domain/Interfaces/DownloadedSongsRepository.swift</code></td></tr>
+    <tr><td><code>SongDownloading</code></td><td><code>Services/SongDownloading.swift</code></td><td><code>Domain/Interfaces/SongDownloading.swift</code></td></tr>
+    <tr><td><code>LyricsFetching</code></td><td><code>Services/LyricsFetching.swift</code></td><td><code>Domain/Interfaces/LyricsFetching.swift</code></td></tr>
+  </table>
+  <p>Pour chacun, la déclaration du protocole quitte son fichier d'origine ; l'implémentation concrète y reste seule. Exemple complet sur <code>LyricsRepository</code> :</p>
+  <pre><code>// NOUVEAU — Domain/Interfaces/LyricsRepository.swift
+import Foundation
+
+nonisolated protocol LyricsRepository: Sendable {
+    func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine]
+}</code></pre>
+  <pre><code>// Repositories/CachedLyricsRepository.swift — ne garde que l'implémentation
+import Foundation
+
+actor CachedLyricsRepository: LyricsRepository {
+    private let service: LyricsFetching
+    private var cache: [Song.ID: [LyricsLine]] = [:]
+
+    init(service: LyricsFetching) {
+        self.service = service
+    }
+
+    func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine] {
+        // ... corps inchangé (Leçons 22-23)
+    }
+}</code></pre>
+  <p>Les trois autres suivent exactement le même geste : le protocole (avec son <code>Sendable</code>, son éventuel <code>nonisolated</code>, ses signatures) part tel quel dans <code>Domain/Interfaces/</code> ; la struct ou l'actor qui le concrétise reste dans <code>Repositories/</code> ou <code>Services/</code>, en gardant seulement les imports dont elle a vraiment besoin (<code>URLSessionLyricsFetching</code> garde <code>import os</code> pour son <code>Logger</code>, par exemple — le protocole <code>LyricsFetching</code>, lui, n'en a besoin d'aucun).</p>
+
+  <h2><code>LyricsFetching</code> gagne un <code>nonisolated</code> manquant</h2>
+  <p>En le déplaçant, un détail signalé par l'audit (point 3.7) se corrige au passage : <code>LyricsRepository</code> et <code>DownloadedSongsRepository</code> sont déjà déclarés <code>nonisolated protocol ... : Sendable</code> (depuis la Leçon 7 et sa correction) — <code>LyricsFetching</code>, ajouté en Leçon 22, avait été oublié :</p>
+  <pre><code>// NOUVEAU — Domain/Interfaces/LyricsFetching.swift
+nonisolated protocol LyricsFetching: Sendable {
+    func fetchLyrics(artist: String, title: String) async throws(LyricsError) -> String
+}</code></pre>
+  <p>Ce n'est pas un bug qui empêchait de compiler — sinon Nicolas l'aurait vu dès la Leçon 22. C'est une incohérence stylistique entre protocoles frères qui jouent exactement le même rôle : les quatre décrivent un contrat asynchrone, <code>Sendable</code>, dont l'isolation ne doit dépendre d'aucun acteur particulier. Aligner <code>LyricsFetching</code> sur ses trois voisins retire une question qu'un futur lecteur du code se poserait sinon ("pourquoi celui-ci est différent ?") — le genre de détail que la Leçon 19 avait déjà rendu familier.</p>
+
+  <details class="aside">
+    <summary>Pourquoi ce déplacement ne change rien à l'exécution</summary>
+    <p>Swift ne donne aucune signification particulière à l'emplacement d'un fichier dans le projet — contrairement à d'autres langages où le chemin du fichier fait partie de l'identité du type (un package Java, par exemple). Tout le code de Karamock compile dans une seule cible ; <code>Domain/Interfaces/LyricsRepository.swift</code> et <code>Repositories/CachedLyricsRepository.swift</code> se voient l'un l'autre exactement comme avant. Cette leçon ne change donc que l'organisation visuelle du projet dans Xcode, pas une seule ligne de logique exécutée.</p>
+  </details>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build du projet (⌘B) : doit réussir sans erreur — comme la Leçon 24, c'est un pur déplacement.</li>
+      <li>N'importe quel écran déjà fonctionnel (téléchargement d'une chanson, affichage de paroles, bibliothèque) doit se comporter exactement comme avant — aucune régression attendue, puisque rien n'a changé au runtime.</li>
+      <li>Dans Xcode, vérifie que <code>Domain/Interfaces/</code> contient bien les 4 protocoles et que <code>Repositories/</code>/<code>Services/</code> ne contiennent plus que des implémentations concrètes.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>4 protocoles déclarés dans leur fichier d'implémentation (Data)</td><td>4 protocoles regroupés dans <code>Domain/Interfaces/</code></td></tr>
+    <tr><td>Domain dépend d'un détail d'organisation de Data</td><td>Data implémente une abstraction possédée par Domain (DIP respecté)</td></tr>
+    <tr><td><code>LyricsFetching</code> sans <code>nonisolated</code>, différent de ses 3 voisins</td><td>Les 4 protocoles suivent la même convention <code>nonisolated protocol : Sendable</code></td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source</div>
+    <code>audits/2026-07-28-clean-architecture-audit.md</code> — section 2 (point #4) et section 3.4 (point 3.7) — l'audit qui motive cette leçon.<br>
+    <a href="0007-domain-usecase-et-repository.html">Leçon 7</a> — où la distinction Service/Repository et la convention <code>nonisolated protocol : Sendable</code> ont été posées la première fois.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Que dit le Dependency Inversion Principle appliqué à ce projet ?</p>
+    <label><input type="radio" name="q1" value="a"> Data doit toujours dépendre directement des types concrets de Domain</label>
+    <label><input type="radio" name="q1" value="b"> Domain ne doit jamais définir la moindre interface, seulement des UseCase</label>
+    <label><input type="radio" name="q1" value="c"> Domain possède l'abstraction ; Data l'implémente, sans relation directe inverse</label>
+    <label><input type="radio" name="q1" value="d"> Les deux couches doivent être fusionnées dans un seul et même dossier</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">2. Concrètement, quel était le problème avec <code>LyricsRepository</code> avant cette leçon ?</p>
+    <label><input type="radio" name="q2" value="a"> Le protocole était déclaré dans le même fichier que son implémentation Data</label>
+    <label><input type="radio" name="q2" value="b"> Le protocole ne conformait à aucun moment au protocole Sendable</label>
+    <label><input type="radio" name="q2" value="c"> CachedLyricsRepository ne pouvait techniquement pas être un actor</label>
+    <label><input type="radio" name="q2" value="d"> FetchLyricsUseCase ne pouvait pas encore compiler avec ce protocole</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi ce déplacement de fichiers ne change-t-il rien au comportement de l'app ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que les protocoles concernés ne sont en réalité jamais appelés</label>
+    <label><input type="radio" name="q3" value="b"> Parce que FactoryKit recompile automatiquement tout le Container</label>
+    <label><input type="radio" name="q3" value="c"> Parce que Domain/Interfaces bénéficie d'une optimisation propre au compilateur</label>
+    <label><input type="radio" name="q3" value="d"> Parce que Swift ne donne aucune signification à l'emplacement d'un fichier</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">4. Pourquoi ajouter <code>nonisolated</code> à <code>LyricsFetching</code> à cette occasion ?</p>
+    <label><input type="radio" name="q4" value="a"> Sans ce mot-clé, le protocole ne pouvait techniquement pas compiler</label>
+    <label><input type="radio" name="q4" value="b"> Pour l'aligner sur la convention déjà suivie par ses trois protocoles voisins</label>
+    <label><input type="radio" name="q4" value="c"> Pour permettre à URLSessionLyricsFetching de devenir un actor</label>
+    <label><input type="radio" name="q4" value="d"> Pour supprimer le besoin d'utiliser await à chaque appel réseau</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Une erreur "Cannot find type X in scope" apparaît après avoir déplacé un protocole ? Même piste qu'en Leçon 24 : vérifie le Target Membership du nouveau fichier dans le File Inspector. Une conformité qui semble "disparaître" est presque toujours un problème de cible, pas de code.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0024-domain-modeles-hors-des-views.html">← Leçon 24 : les modèles de domaine hors des Views</a></span>
+    <span>Leçon suivante : deux vrais bugs de concurrence (Task orpheline, identité de Song)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
