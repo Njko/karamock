@@ -6,5 +6,5 @@
 //
 
 nonisolated protocol SongDownloading : Sendable {
-    func download(_ song: Song) -> AsyncStream<Double>
+    func download(_ song: Song) -> AsyncThrowingStream<Double, Error>
 }

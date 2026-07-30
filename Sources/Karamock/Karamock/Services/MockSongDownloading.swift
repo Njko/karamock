@@ -6,15 +6,29 @@
 //
 
 struct MockSongDownloading: SongDownloading {
-    func download(_ song: Song) -> AsyncStream<Double> {
-        AsyncStream { continuation in
+    
+    var shouldFail = false
+    
+    func download(_ song: Song) -> AsyncThrowingStream<Double, Error> {
+        AsyncThrowingStream { continuation in
             Task {
-                for step in 1...10 {
-                    try? await Task.sleep(for: .milliseconds(200))
-                    continuation.yield(Double(step) / 10)
+                do {
+                    for step in 1...10 {
+                        try await Task.sleep(for: .milliseconds(200))
+                        if shouldFail, step == 5 {
+                            throw SimulatedDownloadFailure()
+                        }
+                        continuation.yield(Double(step) / 10)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
                 }
-                continuation.finish()
             }
         }
     }
 }
+
+private struct SimulatedDownloadFailure: Error {}

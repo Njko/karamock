@@ -29,13 +29,18 @@ final class SongDownloadViewModel {
         guard state == .notDownloaded || state == .failed else { return }
         state = .downloading(progress: 0)
         downloadTask = Task {
-            for await progress in downloadSong(song) {
+            do {
+                for try await progress in downloadSong(song) {
+                    guard !Task.isCancelled else { return }
+                    state = .downloading(progress: progress)
+                }
                 guard !Task.isCancelled else { return }
-                state = .downloading(progress: progress)
+                state = .downloaded
+                downloadTask = nil
+            } catch {
+                state = .failed
+                downloadTask = nil
             }
-            guard !Task.isCancelled else { return }
-            state = .downloaded
-            downloadTask = nil
         }
     }
     

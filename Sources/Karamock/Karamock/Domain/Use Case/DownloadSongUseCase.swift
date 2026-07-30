@@ -17,17 +17,20 @@ struct DownloadSongUseCase: Sendable {
         self.repository = repository
     }
     
-    func callAsFunction(_ song: Song) -> AsyncStream<Double> {
-        AsyncStream { continuation in
+    func callAsFunction(_ song: Song) -> AsyncThrowingStream<Double, Error> {
+        AsyncThrowingStream { continuation in
             let task = Task {
-                for await progress in service.download(song) {
-                    guard !Task.isCancelled else { break }
-                    continuation.yield(progress)
-                }
-                if !Task.isCancelled {
+                do {
+                    for try await progress in service.download(song) {
+                        guard !Task.isCancelled else { break }
+                        continuation.yield(progress)
+                    }
+                    guard !Task.isCancelled else { return }
                     await repository.add(song)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
                 }
-                continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
         }

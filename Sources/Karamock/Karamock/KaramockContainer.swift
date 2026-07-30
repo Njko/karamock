@@ -22,6 +22,10 @@ extension Container {
         self { SimpleDownloadedSongsRepository() }
             .singleton
     }
+    
+    var songDownloading: Factory<SongDownloading> {
+        self { MockSongDownloading() }
+    }
 
     // Domain
     var fetchLyrics: Factory<FetchLyricsUseCase> {
@@ -29,7 +33,7 @@ extension Container {
     }
     
     var downloadSong: Factory<DownloadSongUseCase> {
-        self { DownloadSongUseCase(service: MockSongDownloading(), repository: self.downloadedSongsRepository()) }
+        self { DownloadSongUseCase(service: self.songDownloading(), repository: self.downloadedSongsRepository()) }
     }
     
     var fetchDownloadedSongs: Factory<FetchDownloadedSongsUseCase> {
