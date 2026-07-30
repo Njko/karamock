@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 27 — Nettoyage : le service de téléchargement devient réel</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 27 · Nettoyage architecture (4/N)</p>
+  <h1>Le service de téléchargement devient réel : throwing, container, annulation propre</h1>
+  <p class="subtitle">La Leçon 26 a rendu l'annulation d'un téléchargement fiable de bout en bout. Il reste trois trous dans le même service : <code>SongDownloading</code> ne peut techniquement jamais échouer (<code>DownloadState.failed</code> est du code mort), <code>MockSongDownloading</code> est câblé en dur dans le container sans jamais être déclaré comme dépendance, et le mock avale silencieusement les annulations avec un <code>try?</code>. Cette leçon ferme les trois.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> un service qui ne peut jamais échouer n'est pas un vrai service, c'est une démo. Savoir faire remonter un échec proprement à travers un flux asynchrone — sans casser l'annulation qui vient d'être corrigée — est exactement le genre de sujet qu'un Tech Lead doit pouvoir dérouler en entretien.</p>
+  </div>
+
+  <h2>Ce que l'audit a trouvé</h2>
+  <p>Trois lignes distinctes dans l'audit, toutes sur le même service :</p>
+  <ul>
+    <li><em>"Aucune vraie implémentation de <code>SongDownloading</code> n'existe. <code>SongDownloading</code> n'est pas enregistré dans le container → non-swappable."</em> (point #5)</li>
+    <li><em>"État <code>.failed</code> jamais atteint (<code>SongDownloading</code> non-throwing)"</em> (section 3, point 5)</li>
+    <li><em>"<code>try?</code> avale <code>CancellationError</code> → boucle non stoppable"</em> (section 3, point 3)</li>
+  </ul>
+  <p>Une précision de périmètre avant de commencer : l'audit suggère aussi de "créer <code>URLSessionSongDownloading</code>" — une vraie implémentation réseau. Karamock n'a pas de véritable backend de téléchargement de chansons à interroger ; inventer un endpoint fictif n'apporterait rien et introduirait une API imaginaire dans le code. "Le service devient réel" dans cette leçon veut dire : la <em>plomberie</em> devient celle d'un vrai service de production (déclaré comme dépendance, capable d'échouer, annulation propre) — pas qu'on simule un réseau qui n'existe pas.</p>
+
+  <h2>1. Enregistrer <code>SongDownloading</code> dans le container</h2>
+  <p><code>KaramockContainer.swift</code> construit <code>MockSongDownloading()</code> directement à l'intérieur de la Factory de <code>DownloadSongUseCase</code> — le service n'existe nulle part en tant que dépendance déclarée :</p>
+  <pre><code>// KaramockContainer.swift — ACTUEL
+var downloadSong: Factory&lt;DownloadSongUseCase&gt; {
+    self { DownloadSongUseCase(service: MockSongDownloading(), repository: self.downloadedSongsRepository()) }
+}</code></pre>
+  <p>Compare avec <code>lyricsFetching</code>, juste au-dessus dans le même fichier, qui suit déjà le bon pattern :</p>
+  <pre><code>var lyricsFetching: Factory&lt;LyricsFetching&gt; {
+    self { URLSessionLyricsFetching() }
+}</code></pre>
+  <p><code>SongDownloading</code> doit recevoir exactement le même traitement — sa propre Factory, référencée via <code>self.songDownloading()</code> plutôt que construite en dur à l'intérieur d'une autre :</p>
+  <pre><code>// CORRECTION — KaramockContainer.swift
+var songDownloading: Factory&lt;SongDownloading&gt; {
+    self { MockSongDownloading() }
+}
+
+var downloadSong: Factory&lt;DownloadSongUseCase&gt; {
+    self { DownloadSongUseCase(service: self.songDownloading(), repository: self.downloadedSongsRepository()) }
+}</code></pre>
+  <p>Le comportement de l'app ne change pas d'un octet — <code>MockSongDownloading()</code> reste ce qui tourne en production, puisqu'il n'existe rien d'autre à mettre à sa place. Ce qui change, c'est que la dépendance est désormais nommée et remplaçable : un test, un futur service réel, ou une preview peuvent l'injecter par <code>Container.shared.songDownloading.register { ... }</code> sans toucher à <code>downloadSong</code>.</p>
+
+  <h2>2. Rendre <code>SongDownloading.download()</code> throwing</h2>
+  <p><code>AsyncStream&lt;Double&gt;</code> ne peut structurellement rien signaler d'autre qu'une valeur ou une fin — aucune erreur ne peut transiter par ce type. C'est pour ça que <code>DownloadState.failed</code>, déjà défini, ne peut jamais être atteint : rien dans la chaîne ne peut produire cet état.</p>
+  <pre><code>// Domain/Interfaces/Services/SongDownloading.swift — ACTUEL
+nonisolated protocol SongDownloading: Sendable {
+    func download(_ song: Song) -> AsyncStream&lt;Double&gt;
+}</code></pre>
+  <p>Le type qui permet de signaler un échec dans un flux existe dans la bibliothèque standard : <code>AsyncThrowingStream</code>. Une nuance à connaître avant de l'utiliser — ce type est déclaré générique sur son type d'erreur (<code>AsyncThrowingStream&lt;Element, Failure&gt;</code>), mais tous ses initialiseurs publics imposent <code>Failure == Error</code> : il n'est aujourd'hui pas possible d'écrire <code>AsyncThrowingStream&lt;Double, DownloadError&gt;</code> avec un type d'erreur concret, contrairement aux typed throws (<code>throws(LyricsError)</code>) déjà utilisés ailleurs dans ce projet pour <code>fetchLyrics</code>. Ce n'est pas un choix de style ici, c'est une limitation actuelle de la bibliothèque standard — un correctif est demandé depuis 2024 mais pas encore livré.</p>
+  <pre><code>// CORRECTION — Domain/Interfaces/Services/SongDownloading.swift
+nonisolated protocol SongDownloading: Sendable {
+    func download(_ song: Song) -> AsyncThrowingStream&lt;Double, Error&gt;
+}</code></pre>
+  <p><code>DownloadSongUseCase</code> doit suivre exactement le même changement de type, et gérer l'erreur en la laissant simplement traverser (elle ne fait rien de spécial ici, elle est juste retransmise) :</p>
+  <pre><code>// Domain/Use Case/DownloadSongUseCase.swift — CORRECTION
+func callAsFunction(_ song: Song) -> AsyncThrowingStream&lt;Double, Error&gt; {
+    AsyncThrowingStream { continuation in
+        let task = Task {
+            do {
+                for try await progress in service.download(song) {
+                    guard !Task.isCancelled else { break }
+                    continuation.yield(progress)
+                }
+                guard !Task.isCancelled else { return }
+                await repository.add(song)
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+        continuation.onTermination = { _ in task.cancel() }
+    }
+}</code></pre>
+  <p>Le point à ne pas manquer : si <code>service.download(song)</code> lève une erreur, l'exécution saute directement au <code>catch</code> — <code>repository.add(song)</code> n'est alors jamais atteint, sans qu'il soit besoin d'un garde supplémentaire pour ce cas. Le <code>guard !Task.isCancelled</code>, lui, reste nécessaire pour une raison différente et plus subtile, expliquée juste en dessous.</p>
+
+  <details class="aside">
+    <summary>L'annulation d'un AsyncThrowingStream ne lève PAS d'erreur dans le catch</summary>
+    <p>Piège à connaître avant d'aller plus loin : quand la <code>Task</code> qui itère un <code>AsyncThrowingStream</code> via <code>for try await</code> est annulée, l'itération ne lève <em>pas</em> de <code>CancellationError</code> dans un <code>catch</code> englobant. Franz Busch, de l'équipe Swift, l'explique explicitement sur le forum Swift : <em>"Returning nil on cancellation is a totally valid thing for AsyncSequences to do. In fact it is the only thing for AsyncThrowingStream to do since the stream's Failure type might be a specific error so it can't just throw a CancellationError."</em> Concrètement : l'annulation fait sortir la boucle <code>for try await</code> silencieusement, exactement comme une fin normale du flux — sans passer par un <code>catch</code>. C'est <em>pour cette raison précise</em> que les deux <code>guard !Task.isCancelled</code> (dans la boucle et juste après) restent indispensables, même avec un flux devenu throwing : eux seuls distinguent "le flux s'est terminé normalement" de "l'itération a été abandonnée par annulation" — le langage ne fait pas cette distinction à ta place.</p>
+  </details>
+
+  <h2>3. Le ViewModel distingue enfin succès, annulation et échec</h2>
+  <pre><code>// ViewModels/SongDownloadViewModel.swift — CORRECTION
+func startDownload() {
+    guard state == .notDownloaded || state == .failed else { return }
+    state = .downloading(progress: 0)
+    downloadTask = Task {
+        do {
+            for try await progress in downloadSong(song) {
+                guard !Task.isCancelled else { return }
+                state = .downloading(progress: progress)
+            }
+            guard !Task.isCancelled else { return }
+            state = .downloaded
+            downloadTask = nil
+        } catch {
+            state = .failed
+            downloadTask = nil
+        }
+    }
+}</code></pre>
+  <p>Trois issues, désormais toutes représentées : la boucle se termine normalement → <code>.downloaded</code> ; la Task est annulée → sortie silencieuse, les deux <code>guard</code> empêchent toute mise à jour d'état (ni <code>.downloaded</code>, ni <code>.failed</code> — <code>cancelDownload()</code> a déjà mis <code>.notDownloaded</code>) ; le service lève une erreur → <code>catch</code>, <code>.failed</code>. <code>cancelDownload()</code> n'a besoin d'aucun changement, il ne fait que déclencher le deuxième cas.</p>
+
+  <h2>4. Corriger le <code>try?</code> qui avale l'annulation dans le mock</h2>
+  <p><code>MockSongDownloading</code> doit à la fois adopter le nouveau type de retour et cesser d'ignorer silencieusement l'annulation :</p>
+  <pre><code>// Services/MockSongDownloading.swift — ACTUEL
+struct MockSongDownloading: SongDownloading {
+    func download(_ song: Song) -> AsyncStream&lt;Double&gt; {
+        AsyncStream { continuation in
+            Task {
+                for step in 1...10 {
+                    try? await Task.sleep(for: .milliseconds(200))   // avale CancellationError
+                    continuation.yield(Double(step) / 10)
+                }
+                continuation.finish()
+            }
+        }
+    }
+}</code></pre>
+  <p><code>try?</code> transforme toute erreur — y compris une <code>CancellationError</code> légitime — en <code>nil</code> silencieux : la boucle continue d'itérer et de <code>yield</code> comme si de rien n'était, même après une demande d'annulation. Le correctif distingue explicitement une annulation propre (on arrête, sans que ce soit un échec) d'une éventuelle vraie erreur (on la fait remonter) :</p>
+  <pre><code>// CORRECTION — Services/MockSongDownloading.swift
+struct MockSongDownloading: SongDownloading {
+    var shouldFail = false
+
+    func download(_ song: Song) -> AsyncThrowingStream&lt;Double, Error&gt; {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    for step in 1...10 {
+                        try await Task.sleep(for: .milliseconds(200))
+                        if shouldFail, step == 5 {
+                            throw SimulatedDownloadFailure()
+                        }
+                        continuation.yield(Double(step) / 10)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+}
+
+private struct SimulatedDownloadFailure: Error {}</code></pre>
+  <p><code>try await Task.sleep(...)</code> (sans <code>?</code>) laisse l'erreur remonter jusqu'au <code>do/catch</code> qui l'entoure. Deux issues distinctes : <code>catch is CancellationError</code> reconnaît une annulation propre et termine le flux normalement (<code>continuation.finish()</code>, sans erreur — une annulation n'est pas un échec métier) ; le <code>catch</code> générique restant couvre toute autre erreur, réelle celle-ci, et la fait remonter via <code>continuation.finish(throwing:)</code>.</p>
+  <p><code>shouldFail</code> (nouveau, <code>false</code> par défaut) ne change rien au comportement de production — <code>MockSongDownloading()</code>, tel qu'enregistré dans le container, continue de toujours réussir. C'est un point d'entrée pour vérifier concrètement que <code>.failed</code> fonctionne (scénario ci-dessous), et pour l'écrire en test à la Leçon 30 : sans lui, rien dans le mock actuel ne peut jamais réellement déclencher <code>.failed</code>, et l'affirmation "l'état est atteignable" resterait un fait sur le papier, jamais vérifié.</p>
+
+  <details class="aside">
+    <summary>Pourquoi ce code compile sous Swift 6 strict concurrency</summary>
+    <p>Deux questions valent la peine d'être posées avant d'accepter ce code : <code>AsyncThrowingStream&lt;Double, Error&gt;</code> est-il bien <code>Sendable</code>, comme l'exige le protocole <code>SongDownloading: Sendable</code> ? Et une erreur quelconque (<code>any Error</code>) peut-elle traverser une frontière d'acteur sans problème ? Réponse aux deux, vérifiée dans le code source de la bibliothèque standard : <code>AsyncThrowingStream</code> conforme à <code>Sendable</code> dès que son <code>Element</code> l'est (<code>extension AsyncThrowingStream: @unchecked Sendable where Element: Sendable</code>) — <code>Double</code> l'est, donc c'est réglé sans condition sur <code>Failure</code>. Et la raison pour laquelle aucune condition sur <code>Failure</code> n'est nécessaire : le protocole <code>Error</code> lui-même hérite de <code>Sendable</code> dans sa déclaration (<code>public protocol Error: Sendable</code>) — tout type conforme à <code>Error</code>, et donc <code>any Error</code>, est <code>Sendable</code> par construction. Une erreur qui traverse une frontière d'acteur ne pose donc jamais de problème de concurrence en soi.</p>
+  </details>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build du projet (⌘B) : doit réussir sans erreur.</li>
+      <li>Dans Xcode, vérifie que <code>Container.shared.songDownloading</code> existe et que <code>downloadSong</code> l'utilise via <code>self.songDownloading()</code> plutôt que de construire <code>MockSongDownloading()</code> directement.</li>
+      <li>Lance un téléchargement normal : il doit se comporter exactement comme avant (0% à 100%, puis <code>.downloaded</code>) — <code>shouldFail</code> vaut <code>false</code> par défaut.</li>
+      <li>Modifie temporairement <code>Container.shared.songDownloading.register { MockSongDownloading(shouldFail: true) }</code> (par exemple dans le <code>#Preview</code> de <code>SongOptionsSheet</code>) : lance un téléchargement, il doit s'arrêter à 40% et passer à <code>.failed</code> plutôt qu'à <code>.downloaded</code>.</li>
+      <li>Remets <code>shouldFail: false</code> (ou retire l'override) avant de continuer — c'était uniquement pour vérifier le chemin d'échec.</li>
+      <li>Lance un téléchargement puis annule-le avant la fin (Leçon 26) : l'état doit revenir à <code>.notDownloaded</code>, jamais passer par <code>.failed</code>.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>MockSongDownloading()</code> construit en dur dans la Factory de <code>downloadSong</code></td><td><code>songDownloading: Factory&lt;SongDownloading&gt;</code> déclarée séparément, référencée via <code>self.songDownloading()</code></td></tr>
+    <tr><td><code>SongDownloading.download()</code> retourne <code>AsyncStream&lt;Double&gt;</code> — ne peut jamais échouer</td><td>Retourne <code>AsyncThrowingStream&lt;Double, Error&gt;</code> — un échec peut être signalé</td></tr>
+    <tr><td><code>DownloadState.failed</code> défini mais jamais atteignable</td><td><code>SongDownloadViewModel</code> passe à <code>.failed</code> sur un <code>catch</code> réel</td></tr>
+    <tr><td><code>try?</code> avale silencieusement <code>CancellationError</code> dans le mock, la boucle continue</td><td><code>do/catch</code> distingue <code>CancellationError</code> (fin propre) d'une vraie erreur (<code>finish(throwing:)</code>)</td></tr>
+    <tr><td>Aucun moyen de vérifier que <code>.failed</code> fonctionne réellement</td><td><code>shouldFail</code> (mock uniquement, <code>false</code> par défaut) permet de le déclencher à volonté</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source</div>
+    <code>audits/2026-07-28-clean-architecture-audit.md</code> — point #5 (section 2), et section 3 points 3/5 (table des problèmes de concurrence).<br>
+    <a href="0026-bugs-concurrence-task-orpheline-identite.html">Leçon 26</a> — l'annulation propre de <code>DownloadSongUseCase</code>/<code>SongDownloadViewModel</code>, prérequis direct de cette leçon.<br>
+    <a href="https://github.com/swiftlang/swift/blob/main/stdlib/public/Concurrency/AsyncThrowingStream.swift">AsyncThrowingStream.swift</a> (swiftlang/swift) — signatures des initialiseurs publics (<code>where Failure == Error</code>) et conformance <code>Sendable</code> conditionnelle.<br>
+    <a href="https://github.com/apple/swift/blob/main/stdlib/public/core/ErrorType.swift">ErrorType.swift</a> (swiftlang/swift) — <code>public protocol Error: Sendable</code>.<br>
+    <a href="https://forums.swift.org/t/why-does-asyncthrowingstream-silently-finish-without-error-if-cancelled/72777">Swift Forums — "Why does AsyncThrowingStream silently finish, without error, if cancelled?"</a> — confirme le comportement de l'annulation (fin silencieuse, pas d'erreur levée).<br>
+    <a href="https://github.com/swiftlang/swift/issues/75853">swiftlang/swift#75853</a> — demande ouverte pour permettre un <code>Failure</code> concret sur <code>AsyncThrowingStream</code>, toujours non résolue.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi <code>DownloadState.failed</code> ne pouvait-il jamais être atteint avant cette leçon ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce que SongDownloadViewModel ne définissait techniquement pas ce cas</label>
+    <label><input type="radio" name="q1" value="b"> Parce qu'AsyncStream ne peut structurellement transporter aucune erreur</label>
+    <label><input type="radio" name="q1" value="c"> Parce que DownloadState n'était pas encore conforme à Equatable</label>
+    <label><input type="radio" name="q1" value="d"> Parce que MockSongDownloading n'était pas enregistré dans le container</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Pourquoi ne peut-on pas écrire <code>AsyncThrowingStream&lt;Double, DownloadError&gt;</code> avec un type d'erreur concret aujourd'hui ?</p>
+    <label><input type="radio" name="q2" value="a"> DownloadError devrait d'abord conformer explicitement à Sendable</label>
+    <label><input type="radio" name="q2" value="b"> Double n'est techniquement pas compatible avec les typed throws</label>
+    <label><input type="radio" name="q2" value="c"> Le projet n'utilise pas encore Swift 6 strict concurrency complet</label>
+    <label><input type="radio" name="q2" value="d"> Tous les initialiseurs publics du type imposent Failure == Error</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">3. Que se passe-t-il exactement quand la Task qui itère un AsyncThrowingStream est annulée ?</p>
+    <label><input type="radio" name="q3" value="a"> Une CancellationError est levée directement dans le catch englobant</label>
+    <label><input type="radio" name="q3" value="b"> continuation.finish(throwing:) est appelé automatiquement par le langage</label>
+    <label><input type="radio" name="q3" value="c"> L'itération se termine silencieusement, comme une fin normale du flux</label>
+    <label><input type="radio" name="q3" value="d"> Le programme plante avec une erreur fatale non récupérable</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. Pourquoi les deux <code>guard !Task.isCancelled</code> restent-ils nécessaires même après avoir rendu le flux throwing ?</p>
+    <label><input type="radio" name="q4" value="a"> Parce que l'annulation ne déclenche jamais le catch, seule une sortie silencieuse de boucle</label>
+    <label><input type="radio" name="q4" value="b"> Parce que Task.isCancelled doit être vérifié avant tout appel throwing en Swift</label>
+    <label><input type="radio" name="q4" value="c"> Parce que continuation.finish(throwing:) ne compile pas sans ce garde</label>
+    <label><input type="radio" name="q4" value="d"> Parce que DownloadSongUseCase n'est plus Sendable une fois throwing</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">5. Dans le mock corrigé, pourquoi <code>catch is CancellationError</code> appelle-t-il <code>continuation.finish()</code> plutôt que <code>continuation.finish(throwing:)</code> ?</p>
+    <label><input type="radio" name="q5" value="a"> finish(throwing:) ne peut techniquement pas recevoir une CancellationError</label>
+    <label><input type="radio" name="q5" value="b"> Task.sleep ne lève jamais réellement de CancellationError en pratique</label>
+    <label><input type="radio" name="q5" value="c"> Une annulation propre n'est pas un échec métier, juste un arrêt volontaire</label>
+    <label><input type="radio" name="q5" value="d"> Le catch générique suivant intercepterait de toute façon ce cas en premier</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">6. À quoi sert concrètement <code>shouldFail</code> ajouté à <code>MockSongDownloading</code> ?</p>
+    <label><input type="radio" name="q6" value="a"> À remplacer définitivement le comportement par défaut du mock en production</label>
+    <label><input type="radio" name="q6" value="b"> À pouvoir déclencher et vérifier le chemin .failed, resté sinon jamais exercé</label>
+    <label><input type="radio" name="q6" value="c"> À rendre SongDownloading enfin conforme au protocole Sendable</label>
+    <label><input type="radio" name="q6" value="d"> À simuler une latence réseau réaliste absente du mock actuel</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">L'état repasse à <code>.downloaded</code> même après avoir simulé un échec avec <code>shouldFail: true</code> ? Vérifie que le <code>throw SimulatedDownloadFailure()</code> se trouve bien avant le <code>continuation.yield</code> du même step dans la boucle — sinon la valeur est émise avant que l'erreur ne soit levée. Pose la question si l'enchaînement <code>do/catch</code> reste flou.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0026-bugs-concurrence-task-orpheline-identite.html">← Leçon 26 : deux bugs de concurrence bien réels</a></span>
+    <span>Leçon suivante : Repository range, Mapper transforme (SRP)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
