@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 28 — Nettoyage : le Repository range, le Mapper transforme</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 28 · Nettoyage architecture (5/N)</p>
+  <h1>Le Repository range, le Mapper transforme — et deux noms qui mentaient</h1>
+  <p class="subtitle">Cette leçon regroupe quatre corrections plus petites que les précédentes, mais toutes du même ordre : un nom ou un emplacement qui ne dit pas la vérité sur ce que fait vraiment le code. Une leçon nécessite aussi de contredire l'audit sur un point précis — pas parce qu'il avait tort en général, mais parce que les Leçons 26 et 27 ont changé la réalité qu'il décrivait.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> suivre une checklist d'audit sans la reconsidérer face au code réel n'est pas ce qu'on attend d'un Tech Lead — c'est justement le travail de vérifier qu'une recommandation reste valable avant de l'appliquer. Cette leçon en est un exemple concret et assumé.
+  </div>
+
+  <h2>1. Extraire <code>LyricsMapper</code> : le Repository range, il ne transforme pas</h2>
+  <p>Point #8 de l'audit : <em>"Le calcul des timestamps (<code>Double(index) * (duration / lines.count)</code>) est de la logique métier dans un Repository. Un Repository récupère/stocke ; un Mapper transforme."</em></p>
+  <pre><code>// Repositories/CachedLyricsRepository.swift — ACTUEL
+func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine] {
+    if let cached = await cache[song.id] {
+        return cached
+    }
+
+    let rawText = try await service.fetchLyrics(artist: song.artist, title: song.title)
+    let lines = rawText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+    guard !lines.isEmpty else { return [] }
+
+    let interval = song.durationInSeconds / Double(lines.count)
+
+    let result = lines.enumerated().map { index, text in
+        LyricsLine(time: Double(index) * interval, text: text)
+    }
+
+    await cache[song.id] = result
+    return result
+}</code></pre>
+  <p>Cinq lignes sur neuf ne concernent ni la récupération ni le cache — elles transforment un texte brut en <code>[LyricsLine]</code> horodatées. C'est une règle métier autonome (comment répartir des lignes de paroles sur la durée d'une chanson), testable indépendamment de tout réseau ou cache, qui n'a pas sa place dans un Repository :</p>
+  <pre><code>// NOUVEAU — Domain/Mappers/LyricsMapper.swift
+nonisolated enum LyricsMapper {
+    static func map(rawText: String, duration: TimeInterval) -> [LyricsLine] {
+        let lines = rawText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard !lines.isEmpty else { return [] }
+
+        let interval = duration / Double(lines.count)
+        return lines.enumerated().map { index, text in
+            LyricsLine(time: Double(index) * interval, text: text)
+        }
+    }
+}</code></pre>
+  <pre><code>// Repositories/CachedLyricsRepository.swift — CORRECTION
+func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine] {
+    if let cached = await cache[song.id] {
+        return cached
+    }
+
+    let rawText = try await service.fetchLyrics(artist: song.artist, title: song.title)
+    let result = LyricsMapper.map(rawText: rawText, duration: song.durationInSeconds)
+
+    await cache[song.id] = result
+    return result
+}</code></pre>
+  <p><code>enum</code> sans cas plutôt que <code>struct</code> : <code>LyricsMapper</code> n'a aucun état et ne sera jamais instancié, seulement utilisé comme espace de noms pour une fonction statique — un <code>enum</code> vide rend cette intention explicite et empêche techniquement d'écrire <code>LyricsMapper()</code> par erreur, contrairement à une <code>struct</code>.</p>
+  <p><code>nonisolated</code> devant l'<code>enum</code> n'est pas une précaution superflue : <code>LyricsMapper.map(...)</code> est une fonction statique non annotée, donc implicitement <code>@MainActor</code> sous <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> — exactement comme une computed property (Leçon 26). Ni la pureté de la fonction, ni l'absence d'état dans l'<code>enum</code> n'exemptent quoi que ce soit : la règle par défaut de Swift 6 est syntaxique (la déclaration est-elle annotée ?), pas sémantique (le corps a-t-il des effets de bord ?). Sans <code>nonisolated</code>, l'appel depuis <code>CachedLyricsRepository</code> (un <code>actor</code>, donc un domaine d'isolation différent du Main Actor) exigerait <code>await LyricsMapper.map(...)</code> pour un simple calcul synchrone — un aller-retour vers le thread principal sans aucune raison métier.</p>
+
+  <h2>2. Encapsuler <code>lyricsURL</code> — et simplifier au passage le correctif de la Leçon 25</h2>
+  <p>Point 2.10 de l'audit : <code>lyricsURL</code> est aujourd'hui une fonction libre, en dehors de <code>URLSessionLyricsFetching</code>, alors qu'elle ne sert qu'à lui :</p>
+  <pre><code>// Services/URLSessionLyricsFetching.swift — ACTUEL
+struct URLSessionLyricsFetching: LyricsFetching {
+    func fetchLyrics(artist: String, title: String) async throws(LyricsError) -> String {
+        guard let url = await lyricsURL(artist: artist, title: title) else {
+            throw .invalidURL
+        }
+        // ...
+    }
+}
+
+private func lyricsURL(artist: String, title: String) -> URL? { /* ... */ }</code></pre>
+  <p>La rendre <code>private</code> à l'intérieur du type est le premier réflexe (elle n'a aucune raison d'exister en dehors) :</p>
+  <pre><code>struct URLSessionLyricsFetching: LyricsFetching {
+    func fetchLyrics(artist: String, title: String) async throws(LyricsError) -> String {
+        guard let url = lyricsURL(artist: artist, title: title) else { /* ... */ }
+        // ...
+    }
+
+    private func lyricsURL(artist: String, title: String) -> URL? { /* ... */ }   // NE COMPILE PAS SANS AJOUT
+}</code></pre>
+  <p>Mais ce déplacement seul ne suffit pas à retirer le <code>await</code>. <code>fetchLyrics</code> compile aujourd'hui sans annotation <code>nonisolated</code> explicite parce qu'elle <em>hérite</em> automatiquement de l'isolation du protocole qu'elle satisfait (<code>nonisolated protocol LyricsFetching</code>) — un mécanisme d'inférence explicitement listé par SE-0466 ("declarations with inferred actor isolation from ... protocol conformance"). Mais cette inférence ne s'étend qu'aux membres qui satisfont réellement un requirement du protocole. <code>lyricsURL</code>, une méthode privée qui ne fait partie d'aucun contrat, n'en bénéficie <em>pas</em> — elle reste, comme n'importe quelle déclaration non annotée du module, implicitement <code>@MainActor</code>, même voisine d'une méthode <code>nonisolated</code> par inférence. Le <code>await</code> resterait donc nécessaire tel quel.</p>
+  <p>Deux façons de le retirer : annoter <code>lyricsURL</code> individuellement (<code>private nonisolated func lyricsURL(...)</code>), ou — plus propre ici, parce que tout ce type est censé être <code>nonisolated</code> de bout en bout — annoter le <em>type entier</em>, une syntaxe introduite par <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0449-nonisolated-for-global-actor-cutoff.md">SE-0449</a> (Swift 6.1) :</p>
+  <pre><code>// CORRECTION — Services/URLSessionLyricsFetching.swift
+nonisolated struct URLSessionLyricsFetching: LyricsFetching {
+    func fetchLyrics(artist: String, title: String) async throws(LyricsError) -> String {
+        guard let url = lyricsURL(artist: artist, title: title) else {
+            throw .invalidURL
+        }
+        // ... reste du corps inchangé, voir aside ci-dessous pour lyricsFetcherLogger
+    }
+
+    private func lyricsURL(artist: String, title: String) -> URL? {
+        guard let encodedArtist = artist.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let encodedTitle = title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+        else {
+            return nil
+        }
+        return URL(string: "https://api.lyrics.ovh/v1/\(encodedArtist)/\(encodedTitle)")
+    }
+}</code></pre>
+  <p><code>nonisolated struct</code> applique l'annotation à <em>tous</em> les membres du type — méthodes, computed properties, stored properties, initialiseurs — sans avoir à les annoter un par un. Deux simplifications immédiates : <code>lyricsURL</code> n'a plus besoin de sa propre annotation, et l'appel depuis <code>fetchLyrics</code> n'a plus besoin d'<code>await</code>. Cette même syntaxe, si elle avait été connue en Leçon 25, aurait aussi évité d'avoir à annoter <code>fetchLyrics</code> individuellement — bien que ça ne change rien ici, puisque l'inférence par conformance au protocole s'en chargeait déjà.</p>
+
+  <details class="aside">
+    <summary>Pourquoi les <code>await</code> devant <code>lyricsFetcherLogger.error(...)</code> restent, eux, nécessaires</summary>
+    <p>Un piège à ne pas manquer : <code>nonisolated struct URLSessionLyricsFetching</code> ne change rien à <code>lyricsFetcherLogger</code>. Cette constante est déclarée en dehors du type, au niveau du fichier (<code>private let lyricsFetcherLogger = Logger(...)</code>) — l'annotation portée par le <code>struct</code> ne s'applique qu'à ses propres membres, pas aux déclarations globales voisines dans le même fichier. <code>lyricsFetcherLogger</code> reste donc implicitement <code>@MainActor</code>, et les deux <code>await lyricsFetcherLogger.error(...)</code> introduits en Leçon 25 restent inchangés. Cette leçon ne les retire pas — elle ne visait que <code>lyricsURL</code>, précisément parce que c'est la seule tâche listée par l'audit (point 2.10). Rendre le logger lui-même <code>nonisolated</code> serait un choix légitime, mais un sujet différent, hors périmètre ici.</p>
+  </details>
+
+  <h2>3. Renommer <code>SimpleDownloadedSongsRepository</code> → <code>InMemoryDownloadedSongsRepository</code></h2>
+  <p>Point 1.7 de l'audit, un renommage Xcode simple mais qui change quelque chose de réel : "Simple" ne dit rien sur la stratégie de stockage — n'importe quel Repository pourrait revendiquer d'être "simple". "InMemory" dit précisément ce que quiconque lisant ce nom a besoin de savoir avant de l'utiliser : le stockage est un tableau en mémoire, perdu à chaque relance de l'app. Une information qu'un futur "InMemory" vs "Persistent" rendrait immédiatement visible dans le nom du type, sans avoir à ouvrir le fichier.</p>
+  <pre><code>// AVANT : Repositories/SimpleDownloadedSongsRepository.swift
+actor SimpleDownloadedSongsRepository: DownloadedSongsRepository { /* ... */ }
+
+// APRÈS : Repositories/InMemoryDownloadedSongsRepository.swift
+actor InMemoryDownloadedSongsRepository: DownloadedSongsRepository { /* ... */ }</code></pre>
+  <p>Le corps ne change pas d'une ligne — seul le nom du type (et donc du fichier, et la référence dans <code>KaramockContainer.swift</code>, <code>self { InMemoryDownloadedSongsRepository() }</code>) change.</p>
+
+  <h2>4. <code>mockLyrics</code> et <code>MockSongDownloading</code> — pourquoi l'audit ne peut plus être suivi tel quel</h2>
+  <p>Point #9 de l'audit, écrit le 2026-07-28 : <em>"Des données de test polluent le bundle de production"</em>, avec pour correctif suggéré de déplacer <code>MockSongDownloading</code> et <code>mockLyrics</code> vers <code>KaramockTests/Mocks/</code>. Vérification faite sur le code actuel : les deux sont bien utilisés en production, pas seulement dans des tests.</p>
+  <pre><code>// ViewModels/FullScreenPlayerViewModel.swift
+private(set) var lyrics: [LyricsLine] = mockLyrics   // état initial, avant le premier chargement réel
+
+// Views/Player/FullScreenPlayer/FullScreenPlayerView.swift
+LyricsView(lyrics: viewModel?.lyrics ?? mockLyrics, currentTime: progress)   // filet avant que le ViewModel existe
+
+// KaramockContainer.swift
+var songDownloading: Factory&lt;SongDownloading&gt; {
+    self { MockSongDownloading() }   // LA seule implémentation de production, depuis la Leçon 27
+}</code></pre>
+  <p>Déplacer purement et simplement ces deux déclarations vers <code>KaramockTests/</code>, comme le suggère l'audit, casserait la compilation : une cible de test n'est pas visible depuis la cible d'app. L'audit avait raison sur le principe (du code au nom trompeur ne devrait pas se balader en production) mais sa recommandation date d'avant les Leçons 26-27, qui ont transformé <code>MockSongDownloading</code> en implémentation de production assumée — faute de vrai backend de téléchargement à appeler (Leçon 27). Suivre la lettre de l'audit ici serait suivre une checklist plutôt que comprendre le problème qu'elle décrit.</p>
+  <p>Le vrai problème n'est pas l'<em>emplacement</em> de ce code, c'est son <strong>nom</strong> : il prétend être un mock (donc jetable, réservé aux tests) alors qu'il s'agit d'un comportement de production assumé (paroles de secours pendant le chargement, simulation de téléchargement en l'absence de backend réel). Le correctif est de dire la vérité sur ce que c'est :</p>
+  <pre><code>// RENOMMÉ — Domain/Models/LyricsLine.swift
+let placeholderLyrics: [LyricsLine] = [ /* ... contenu inchangé ... */ ]</code></pre>
+  <pre><code>// RENOMMÉ — Services/SimulatedSongDownloading.swift (était MockSongDownloading.swift)
+struct SimulatedSongDownloading: SongDownloading {
+    func download(_ song: Song) -> AsyncThrowingStream&lt;Double, Error&gt; {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    for step in 1...10 {
+                        try await Task.sleep(for: .milliseconds(200))
+                        continuation.yield(Double(step) / 10)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+}</code></pre>
+  <p><code>shouldFail</code> disparaît de cette version : c'était un crochet de test (forcer un échec pour vérifier <code>.failed</code>, Leçon 27) qui n'avait aucune raison d'être configurable dans du code livré à un utilisateur réel. Cette capacité ne disparaît pas pour autant — elle migre là où elle appartenait depuis le début, dans un vrai mock, réservé à la cible de tests :</p>
+  <pre><code>// NOUVEAU — KaramockTests/Services/MockSongDownloading.swift
+@testable import Karamock
+
+struct MockSongDownloading: SongDownloading {
+    var shouldFail = false
+
+    func download(_ song: Song) -> AsyncThrowingStream&lt;Double, Error&gt; {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    for step in 1...10 {
+                        try await Task.sleep(for: .milliseconds(200))
+                        if shouldFail, step == 5 {
+                            throw SimulatedDownloadFailure()
+                        }
+                        continuation.yield(Double(step) / 10)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+}
+
+private struct SimulatedDownloadFailure: Error {}</code></pre>
+  <p>Le nom <code>MockSongDownloading</code> se libère du même coup pour ce à quoi il correspond réellement — un vrai mock, dans <code>KaramockTests/Services/</code>, à côté de <code>KaramockTests/Repositories/MockDownloadedSongsRepository.swift</code> (convention déjà en place, dossier par dossier miroir de la cible d'app). Dernier ajustement, dans <code>KaramockContainer.swift</code> :</p>
+  <pre><code>var songDownloading: Factory&lt;SongDownloading&gt; {
+    self { SimulatedSongDownloading() }
+}</code></pre>
+  <p>Conséquence à anticiper : le contournement manuel évoqué en Leçon 27 pour vérifier <code>.failed</code> (surcharger <code>Container.shared.songDownloading</code> depuis un <code>#Preview</code> avec <code>MockSongDownloading(shouldFail: true)</code>) ne fonctionne plus — ce type n'existe désormais que dans la cible de tests, invisible depuis l'app. C'est voulu : la bonne façon de vérifier <code>.failed</code> devient un vrai test, exactement le sujet de la Leçon 30.</p>
+
+  <details class="aside">
+    <summary>Pourquoi ce n'est pas un désaveu de l'audit, juste son application correcte</summary>
+    <p>L'audit est un instantané du 2026-07-28 — une photo du code à un instant donné, pas une spécification figée à appliquer aveuglément des semaines plus tard. Les Leçons 26 et 27 ont changé un fait sur lequel reposait sa recommandation #9 (l'existence, ou non, d'une vraie implémentation réseau à venir). Continuer à suivre la lettre d'une recommandation devenue incompatible avec des décisions prises entre-temps serait le signe qu'on exécute une checklist sans la comprendre — l'audit lui-même, dans son esprit ("des données de test ne devraient pas polluer le bundle de production"), reste totalement valide ; c'est seulement son <em>plan d'action</em> précis qui ne tient plus tel quel.</p>
+  </details>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build du projet (⌘B) : doit réussir sans erreur.</li>
+      <li>Affiche les paroles d'une chanson : comportement identique à avant (fetch, cache, fallback en cas d'erreur) — seul le code interne a changé.</li>
+      <li>Dans Xcode, vérifie que <code>LyricsMapper.map(...)</code> compile sans <code>await</code> depuis <code>CachedLyricsRepository</code>.</li>
+      <li>Vérifie que <code>URLSessionLyricsFetching</code> est <code>nonisolated struct</code>, que <code>lyricsURL</code> est privée à l'intérieur, et que les deux <code>await lyricsFetcherLogger.error(...)</code> sont toujours là (ils n'ont pas à disparaître).</li>
+      <li>Vérifie que plus aucun fichier ne référence <code>SimpleDownloadedSongsRepository</code> ni <code>MockSongDownloading</code> dans la cible d'app — seulement <code>InMemoryDownloadedSongsRepository</code> et <code>SimulatedSongDownloading</code>.</li>
+      <li>Lance un téléchargement normal : doit toujours réussir (0% à 100%, <code>.downloaded</code>) — <code>SimulatedSongDownloading</code> n'a plus de <code>shouldFail</code>, il réussit toujours.</li>
+      <li>Vérifie que <code>KaramockTests/Services/MockSongDownloading.swift</code> existe et compile dans la cible de tests uniquement.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>Calcul des timestamps inline dans <code>CachedLyricsRepository</code></td><td><code>LyricsMapper.map(...)</code> extrait, <code>nonisolated enum</code> dédié</td></tr>
+    <tr><td><code>lyricsURL</code> fonction libre, hors du type qui l'utilise</td><td>Méthode privée de <code>URLSessionLyricsFetching</code>, type entier <code>nonisolated</code> (SE-0449)</td></tr>
+    <tr><td><code>SimpleDownloadedSongsRepository</code> : nom qui ne dit rien de la stratégie de stockage</td><td><code>InMemoryDownloadedSongsRepository</code> : nom qui dit explicitement "perdu au relancement"</td></tr>
+    <tr><td><code>MockSongDownloading</code>/<code>mockLyrics</code> : noms de test pour du code de production réel</td><td><code>SimulatedSongDownloading</code>/<code>placeholderLyrics</code> en prod ; <code>MockSongDownloading</code> redevient un vrai mock, dans la cible de tests</td></tr>
+    <tr><td><code>shouldFail</code> configurable dans le type livré à l'utilisateur</td><td><code>shouldFail</code> uniquement dans le mock de test, invisible depuis l'app</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source</div>
+    <code>audits/2026-07-28-clean-architecture-audit.md</code> — points #8, #9 (section 2), et roadmap 1.7/1.8/1.9/2.7/2.10 (section 4).<br>
+    <a href="0025-inverser-dependance-protocoles-domain.html">Leçon 25</a> — le correctif original des 3 <code>await</code> sur <code>URLSessionLyricsFetching</code>, partiellement simplifié par cette leçon.<br>
+    <a href="0027-service-telechargement-throwing-container.html">Leçon 27</a> — la décision qui rend <code>MockSongDownloading</code> permanent en production, à l'origine du désaccord avec l'audit sur ce point précis.<br>
+    <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0449-nonisolated-for-global-actor-cutoff.md">SE-0449</a> — <code>nonisolated</code> applicable à un type entier (struct/class/enum/extension), propage à tous ses membres.<br>
+    <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0466-control-default-actor-isolation.md">SE-0466</a> — liste exacte des exemptions à l'isolation par défaut, dont l'inférence par conformance de protocole.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi extraire le calcul des timestamps hors de <code>CachedLyricsRepository</code> ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce qu'un actor ne peut techniquement pas contenir de logique de calcul</label>
+    <label><input type="radio" name="q1" value="b"> Parce que LyricsLine ne peut être construit que depuis un Mapper dédié</label>
+    <label><input type="radio" name="q1" value="c"> Parce qu'un Repository récupère/stocke, un Mapper transforme — deux responsabilités distinctes</label>
+    <label><input type="radio" name="q1" value="d"> Parce que le cache ne fonctionnait pas correctement avec ce calcul inline</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">2. Pourquoi <code>LyricsMapper.map(...)</code> a-t-il besoin de <code>nonisolated</code> malgré sa pureté ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce que les enums sans cas sont toujours isolés au Main Actor par défaut</label>
+    <label><input type="radio" name="q2" value="b"> Parce que TimeInterval n'est techniquement pas conforme à Sendable</label>
+    <label><input type="radio" name="q2" value="c"> Parce que LyricsLine doit d'abord être annoté nonisolated lui-même</label>
+    <label><input type="radio" name="q2" value="d"> Parce que la règle par défaut du module est syntaxique, sans exemption liée à la pureté d'une fonction</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi encapsuler <code>lyricsURL</code> dans le struct seul (sans annotation) ne suffit-il pas à retirer le <code>await</code> ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce qu'être voisine d'une méthode nonisolated n'isole pas automatiquement une autre déclaration</label>
+    <label><input type="radio" name="q3" value="b"> Parce qu'une méthode private ne peut jamais être nonisolated en Swift</label>
+    <label><input type="radio" name="q3" value="c"> Parce que URL n'est techniquement pas conforme à Sendable</label>
+    <label><input type="radio" name="q3" value="d"> Parce que fetchLyrics devrait d'abord perdre son async throws</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">4. Après avoir marqué <code>URLSessionLyricsFetching</code> en <code>nonisolated struct</code>, pourquoi les <code>await lyricsFetcherLogger.error(...)</code> restent-ils nécessaires ?</p>
+    <label><input type="radio" name="q4" value="a"> Logger.error est par nature toujours asynchrone, quel que soit le contexte</label>
+    <label><input type="radio" name="q4" value="b"> lyricsFetcherLogger est déclaré hors du type, non couvert par son annotation nonisolated</label>
+    <label><input type="radio" name="q4" value="c"> Le compilateur ignore nonisolated struct dès qu'un throws(LyricsError) est présent</label>
+    <label><input type="radio" name="q4" value="d"> lyricsFetcherLogger a été retiré du fichier par cette même leçon</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">5. Pourquoi ne pas simplement déplacer <code>MockSongDownloading</code> vers <code>KaramockTests/</code> comme le suggère littéralement l'audit ?</p>
+    <label><input type="radio" name="q5" value="a"> Parce qu'AsyncThrowingStream n'est techniquement pas utilisable dans une cible de tests</label>
+    <label><input type="radio" name="q5" value="b"> Parce que FactoryKit interdit d'enregistrer un type venant d'une autre cible</label>
+    <label><input type="radio" name="q5" value="c"> Parce que KaramockContainer, dans la cible d'app, ne peut pas voir un type compilé seulement dans la cible de tests</label>
+    <label><input type="radio" name="q5" value="d"> Parce que shouldFail doit obligatoirement rester accessible en production</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">6. Qu'est-ce qui a réellement changé entre l'écriture de l'audit et cette leçon, justifiant de s'écarter de sa recommandation #9 ?</p>
+    <label><input type="radio" name="q6" value="a"> mockLyrics a été supprimé du projet avant même cette leçon</label>
+    <label><input type="radio" name="q6" value="b"> La Leçon 27 a fait de MockSongDownloading l'implémentation permanente de production, faute de backend réel</label>
+    <label><input type="radio" name="q6" value="c"> L'audit a été entièrement réécrit après la Leçon 27</label>
+    <label><input type="radio" name="q6" value="d"> DownloadState.failed a été supprimé du projet en Leçon 27</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le renommage de <code>SimpleDownloadedSongsRepository</code> laisse une référence cassée quelque part ? Utilise le renommage intégré d'Xcode (clic droit sur le nom du type → Refactor → Rename) plutôt qu'un chercher-remplacer manuel — il met à jour tous les sites d'appel, y compris dans <code>KaramockContainer.swift</code>. Pose la question si un site d'appel semble avoir été oublié malgré ça.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0027-service-telechargement-throwing-container.html">← Leçon 27 : le service de téléchargement devient réel</a></span>
+    <span>Leçon suivante : Container.shared n'a pas sa place dans une View</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
