@@ -7,10 +7,6 @@
 
 import Foundation
 
-nonisolated protocol LyricsRepository: Sendable {
-    func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine]
-}
-
 actor CachedLyricsRepository: LyricsRepository {
     private let service: LyricsFetching
     private var cache: [Song.ID: [LyricsLine]] = [:]

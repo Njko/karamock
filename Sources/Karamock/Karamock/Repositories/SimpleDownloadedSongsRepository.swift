@@ -6,12 +6,6 @@
 //
 
 import Foundation
-
-nonisolated protocol DownloadedSongsRepository : Sendable {
-    func songs() async -> [Song]
-    func add(_ song: Song) async
-}
-
  
 actor SimpleDownloadedSongsRepository: DownloadedSongsRepository {
      private var storage: [Song] = []
@@ -27,8 +21,3 @@ actor SimpleDownloadedSongsRepository: DownloadedSongsRepository {
         storage.append(song)
     }
 }
-
-
-
-
-

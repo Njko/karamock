@@ -5,10 +5,6 @@
 //  Created by A422GQ on 23/07/2026.
 //
 
-protocol SongDownloading : Sendable {
-    func download(_ song: Song) -> AsyncStream<Double>
-}
-
 struct MockSongDownloading: SongDownloading {
     func download(_ song: Song) -> AsyncStream<Double> {
         AsyncStream { continuation in
