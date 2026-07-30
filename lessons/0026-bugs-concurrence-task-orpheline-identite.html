@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 26 — Nettoyage : deux bugs de concurrence bien réels</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 26 · Nettoyage architecture (3/N)</p>
+  <h1>Deux bugs de concurrence bien réels : Task orpheline et identité instable</h1>
+  <p class="subtitle">La Leçon 19 a posé <code>actor</code>, <code>nonisolated</code> et <code>Sendable</code> comme des règles imposées par le compilateur. Les Leçons 22 et 25 ont montré ce qui se passe quand on les ignore : ça ne compile pas. Cette leçon est différente — les trois problèmes qu'elle corrige compilent très bien. Ce sont de vrais bugs, silencieux, que le compilateur Swift 6 ne peut pas voir.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> un Tech Lead qui sait discuter d'annotations d'isolation ne suffit pas — il doit savoir repérer un bug de concurrence qui compile sans se plaindre. C'est exactement le genre de question qu'on pose en entretien technique senior : "ce code compile, où est le bug ?"
+  </div>
+
+  <h2>Bug #1 — La Task orpheline dans <code>DownloadSongUseCase</code></h2>
+  <p>Point #1 de l'audit, marqué <strong>BUG PROD</strong> : <code>repository.add(song)</code> est appelé sans condition après la boucle, même si le téléchargement a été annulé entre-temps.</p>
+  <pre><code>// Domain/Use Case/DownloadSongUseCase.swift — ACTUEL
+func callAsFunction(_ song: Song) -> AsyncStream&lt;Double&gt; {
+    AsyncStream { continuation in
+        Task {
+            for await progress in service.download(song) {
+                continuation.yield(progress)
+            }
+            await repository.add(song)   // ← appelé même après annulation !
+            continuation.finish()
+        }
+    }
+}</code></pre>
+  <p>Le point à comprendre : cette <code>Task</code> n'est référencée nulle part. Personne ne peut l'annuler explicitement, et surtout — c'est le piège — <strong>l'annulation ne se propage pas toute seule</strong> à travers un <code>AsyncStream</code>. Si le code qui consomme ce stream arrête d'itérer (l'écran de téléchargement disparaît, la <code>Task</code> appelante côté View est annulée), la structured concurrency de Swift ne fait <em>pas</em> le lien automatiquement avec la <code>Task</code> créée à l'intérieur de la closure <code>AsyncStream { }</code> : cette Task est une tâche indépendante, en dehors de toute hiérarchie parent-enfant. Elle continue de tourner jusqu'au bout, télécharge la chanson en entier, et l'ajoute au repository — alors que plus personne n'observe le résultat.</p>
+  <p><code>AsyncStream.Continuation</code> expose justement un point d'accroche pour ce cas : <code>onTermination</code>, un callback appelé quand le stream se termine — que ce soit parce que le producteur a fini normalement, ou parce que le <em>consommateur</em> a arrêté d'itérer. C'est le seul signal fiable pour savoir "plus personne n'écoute" ; à charge pour le code producteur de réagir, en général en annulant sa propre Task interne.</p>
+  <pre><code>// CORRECTION — Domain/Use Case/DownloadSongUseCase.swift
+func callAsFunction(_ song: Song) -> AsyncStream&lt;Double&gt; {
+    AsyncStream { continuation in
+        let task = Task {
+            for await progress in service.download(song) {
+                guard !Task.isCancelled else { break }
+                continuation.yield(progress)
+            }
+            if !Task.isCancelled {
+                await repository.add(song)
+            }
+            continuation.finish()
+        }
+        continuation.onTermination = { _ in task.cancel() }
+    }
+}</code></pre>
+  <p>Trois ajouts, chacun avec un rôle précis : <code>let task = Task { ... }</code> garde une référence annulable ; <code>continuation.onTermination = { _ in task.cancel() }</code> relie enfin l'arrêt du consommateur à l'annulation du producteur ; et <code>guard !Task.isCancelled</code> / <code>if !Task.isCancelled</code> font que <code>repository.add(song)</code> ne s'exécute plus jamais après une annulation. Les trois sont nécessaires — retirer l'un des trois laisse le bug intact ou en ouvre un autre.</p>
+
+  <h2>Bug #2 — La Task non trackée dans <code>SongDownloadViewModel</code></h2>
+  <p>Corriger <code>DownloadSongUseCase</code> ne suffit pas : pour que <code>onTermination</code> se déclenche un jour, il faut que quelque chose, côté consommateur, arrête réellement d'itérer. Or <code>SongDownloadViewModel.startDownload()</code> a exactement le même défaut, à l'autre bout du fil :</p>
+  <pre><code>// ViewModels/SongDownloadViewModel.swift — ACTUEL
+func startDownload() {
+    guard state == .notDownloaded || state == .failed else { return }
+    state = .downloading(progress: 0)
+    Task {
+        for await progress in downloadSong(song) {
+            state = .downloading(progress: progress)
+        }
+        state = .downloaded
+    }
+}</code></pre>
+  <p>Cette <code>Task</code> non plus n'est stockée nulle part. Il n'existe aucun moyen d'interrompre un téléchargement en cours — ni bouton d'annulation, ni nettoyage automatique si la vue disparaît. Résultat concret : le Bug #1 vient d'être corrigé sur le papier, mais tant que rien n'annule jamais la <code>Task</code> du ViewModel, <code>onTermination</code> ne se déclenche jamais non plus — le correctif reste sans effet en pratique. C'est le même anti-pattern que le nouveau document de référence <code>docs/swift6-isolation-bonnes-pratiques.md</code> signale explicitement : <em>"<code>Task { }</code> sans référence stockée → impossible à annuler, fuite mémoire potentielle → <code>private var task: Task&lt;Void, Never&gt;?</code> + <code>deinit { task?.cancel() }</code>"</em>.</p>
+  <pre><code>// CORRECTION — ViewModels/SongDownloadViewModel.swift
+private var downloadTask: Task&lt;Void, Never&gt;?
+
+func startDownload() {
+    guard state == .notDownloaded || state == .failed else { return }
+    state = .downloading(progress: 0)
+    downloadTask = Task {
+        for await progress in downloadSong(song) {
+            guard !Task.isCancelled else { return }
+            state = .downloading(progress: progress)
+        }
+        guard !Task.isCancelled else { return }
+        state = .downloaded
+        downloadTask = nil
+    }
+}
+
+func cancelDownload() {
+    guard case .downloading = state else { return }
+    downloadTask?.cancel()
+    downloadTask = nil
+    state = .notDownloaded
+}</code></pre>
+  <p>Avec les deux bugs corrigés ensemble, la chaîne d'annulation existe enfin de bout en bout : <code>cancelDownload()</code> annule <code>downloadTask</code> → l'itération <code>for await</code> du ViewModel s'arrête (le <code>guard !Task.isCancelled</code> à l'intérieur ET après la boucle empêche toute mise à jour de <code>state</code> une fois l'annulation demandée) → le stream se termine côté consommateur → <code>onTermination</code> se déclenche dans <code>DownloadSongUseCase</code> → la <code>Task</code> interne est annulée → <code>repository.add(song)</code> ne s'exécute jamais pour un téléchargement abandonné.</p>
+  <p>Un écart avec ce qui était enseigné plus haut : pas de <code>deinit</code>. Nicolas a câblé l'annulation directement sur le cycle de vie de la vue plutôt que sur celui du ViewModel :</p>
+  <pre><code>// Views/Discovery/PlaylistDetail/SongOptionSheet/SongOptionsSheet.swift
+.onDisappear {
+    downloadViewModel?.cancelDownload()
+}</code></pre>
+  <p>C'est un meilleur choix que le <code>deinit</code> initialement suggéré. <code>downloadViewModel</code> est un <code>@State</code> porté par <code>SongOptionsSheet</code> — sa désallocation (et donc l'appel à un éventuel <code>deinit</code>) dépend de la gestion interne du stockage <code>@State</code> par SwiftUI, qui peut la retarder (une vue peut rester en mémoire un moment après avoir disparu de l'écran, par exemple dans une pile de navigation). <code>.onDisappear</code>, lui, est un signal explicite et immédiat du framework : "cette vue vient de quitter l'écran". Annuler le téléchargement à ce moment précis, plutôt que d'attendre un <code>deinit</code> dont le timing n'est pas garanti, correspond mieux à l'intention réelle : arrêter le téléchargement dès que l'utilisateur quitte l'écran, pas "un jour, quand ARC le décide".</p>
+
+  <h2>Bug #3 — L'identité instable de <code>Song.id</code></h2>
+  <p>Point #2 de l'audit, également marqué <strong>BUG PROD</strong> :</p>
+  <pre><code>// Domain/Models/Song.swift — ACTUEL
+struct Song: Identifiable, Hashable {
+    let id = UUID()   // ← un nouvel UUID à CHAQUE instanciation
+    let title: String
+    let artist: String
+    let year: Int
+    let duration: String
+    let key: String
+}</code></pre>
+  <p><code>let id = UUID()</code> comme valeur par défaut n'est pas figé une fois pour toutes : cette expression s'exécute à chaque appel de l'initialiseur. Deux <code>Song</code> construits séparément avec exactement le même titre et le même artiste obtiennent deux <code>id</code> différents — et comme <code>Hashable</code>/<code>Equatable</code> synthétisés comparent <em>toutes</em> les propriétés stockées, ces deux valeurs ne sont ni égales, ni interchangeables, alors qu'elles représentent la même chanson.</p>
+  <p>Ce n'est pas théorique : deux endroits du projet dépendent aujourd'hui de cette identité pour fonctionner correctement :</p>
+  <ul>
+    <li><code>SimpleDownloadedSongsRepository.add(_:)</code> fait <code>guard !storage.contains(song) else { return }</code> pour éviter les doublons — une vérification qui ne peut réussir que si <code>song</code> est <em>exactement</em> la même valeur (même <code>id</code>) que celle déjà stockée.</li>
+    <li><code>CachedLyricsRepository</code> indexe son cache par <code>Song.ID</code> (<code>[Song.ID: [LyricsLine]]</code>) — deux <code>Song</code> représentant la même chanson mais construits séparément produiraient deux entrées de cache distinctes, jamais réutilisées entre elles.</li>
+  </ul>
+  <p>Avec <code>mockPlaylist</code>, ce risque reste aujourd'hui <strong>latent</strong> : c'est une constante globale <code>let</code>, évaluée une seule fois au lancement, donc chaque <code>Song</code> qu'elle contient garde le même <code>id</code> pendant toute la durée de vie de l'app. Le bug ne se manifeste que si un <code>Song</code> représentant une chanson déjà connue est reconstruit ailleurs — un futur décodage JSON depuis une vraie API, un test unitaire qui recrée une valeur "attendue" pour la comparer, une recherche qui retourne un nouvel objet pour une chanson déjà en bibliothèque. Le <code>#Preview</code> de <code>FullScreenPlayerView</code> l'illustre d'ailleurs sans le vouloir : il construit un <code>Song(title: "Year of the cat", ...)</code> à chaque rafraîchissement du preview, avec un <code>id</code> neuf à chaque fois.</p>
+  <p>La correction proposée par l'audit remplace l'UUID aléatoire par une identité <em>déterministe</em>, dérivée des champs qui identifient réellement une chanson — exactement ceux utilisés pour interroger l'API lyrics.ovh (<code>fetchLyrics(artist:title:)</code>, Leçon 22) :</p>
+  <pre><code>// CORRECTION — Domain/Models/Song.swift
+struct Song: Identifiable, Hashable {
+    var id: String { "\(artist.lowercased())-\(title.lowercased())" }
+    let title: String
+    let artist: String
+    let year: Int
+    let duration: String
+    let key: String
+}</code></pre>
+  <p><code>id</code> devient une propriété calculée (plus stockée) : deux <code>Song</code> avec le même artiste et le même titre partagent désormais toujours le même <code>id</code>, quel que soit le nombre de fois où ils sont construits séparément. <code>Identifiable</code> n'impose aucune contrainte sur le type de <code>ID</code> au-delà de <code>Hashable</code> — <code>String</code> convient aussi bien que <code>UUID</code>.</p>
+
+  <h2>Un quatrième ajustement, pas anticipé : <code>song.id</code> devient soudain isolé au Main Actor</h2>
+  <p>Ce changement de <code>id</code> — de propriété stockée à propriété calculée — a cassé la compilation de <code>CachedLyricsRepository</code> (Leçon 25), qui indexe son cache par <code>Song.ID</code> :</p>
+  <pre><code>// Repositories/CachedLyricsRepository.swift — avant le fix Song.id
+if let cached = cache[song.id] { return cached }   // compilait
+// ...
+cache[song.id] = result                             // compilait
+
+// après le fix Song.id (id devenu computed) — ne compile plus sans await
+if let cached = await cache[song.id] { return cached }
+// ...
+await cache[song.id] = result</code></pre>
+  <p>C'est le même mécanisme général que la Leçon 25 (isolation par défaut au Main Actor), mais sa cause précise est différente et mérite d'être nommée correctement : ce n'est pas <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> seul qui explique la différence entre l'ancien <code>id</code> (stocké) et le nouveau (calculé) — cette proposition (<a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0466-control-default-actor-isolation.md">SE-0466</a>) rend en principe <em>toute</em> déclaration non annotée <code>@MainActor</code>, stockée ou calculée. C'est une proposition distincte, <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0434-global-actor-isolated-types-usability.md">SE-0434</a>, qui ajoute l'exception précise : les propriétés <strong>stockées</strong> d'un type <code>Sendable</code>, dans le module qui les définit, sont automatiquement traitées comme <code>nonisolated</code> — parce qu'elles ne sont qu'une simple projection mémoire, sans code à exécuter, donc sans risque de data race à protéger. Les propriétés <strong>calculées</strong> sont explicitement exclues de cette exception : leur corps exécute du code, que le compilateur ne peut pas garantir statiquement inoffensif, donc elles restent isolées au Main Actor par défaut.</p>
+  <p>Résultat : <code>let id = UUID()</code> (stocké, <code>UUID</code> est <code>Sendable</code>) était couvert par SE-0434 et accessible sans <code>await</code> depuis n'importe quel acteur. <code>var id: String { ... }</code> (calculé) ne l'est plus — il retombe sous la règle générale de SE-0466 et devient implicitement <code>@MainActor</code>, exactement comme <code>durationInSeconds</code> l'était avant sa correction en Leçon 22. La preuve est dans le même fichier : quelques lignes plus loin, <code>song.durationInSeconds</code> — <code>nonisolated</code> depuis la Leçon 22 — s'utilise sans <code>await</code>, juste à côté de <code>song.id</code> qui, lui, en réclame un.</p>
+  <p>Le code de Nicolas fonctionne tel quel — les deux <code>await</code> sont corrects et suffisants. Mais par cohérence avec le précédent déjà posé pour <code>durationInSeconds</code>, la correction la plus alignée avec la convention du projet serait de marquer <code>id</code> lui-même <code>nonisolated</code> plutôt que de faire porter la traversée de frontière à chaque site d'appel :</p>
+  <pre><code>// Domain/Models/Song.swift — alternative recommandée
+nonisolated var id: String { "\(artist.lowercased())-\(title.lowercased())" }</code></pre>
+  <p><code>id</code> ne lit que <code>artist</code>/<code>title</code> (deux <code>String</code>, <code>Sendable</code>) et n'a aucune raison métier de dépendre du Main Actor — un calcul pur ne devrait jamais forcer un <code>await</code> chez ses appelants. Cette annotation n'entre en conflit avec rien : le requirement <code>id</code> d'<code>Identifiable</code> n'est lui-même pas isolé, et <code>nonisolated</code> sur une computed property est autorisé depuis bien avant Swift 6 strict concurrency.</p>
+
+  <details class="aside">
+    <summary>Pourquoi ce type de bug est invisible pour le compilateur Swift 6</summary>
+    <p>Tout ce que les Leçons 22, 24 et 25 ont enseigné jusqu'ici — <code>nonisolated</code>, <code>actor</code>, <code>Sendable</code> — protège contre les data races : deux bouts de code qui touchent la même mémoire mutable depuis deux threads en même temps. Le compilateur Swift 6 est excellent pour détecter <em>ça</em>. Mais les trois bugs de cette leçon ne sont pas des data races : <code>DownloadSongUseCase</code> et <code>SongDownloadViewModel</code> compilent et s'exécutent sans jamais violer l'isolation d'un acteur — ils lancent juste une <code>Task</code> que personne ne relie à la structured concurrency environnante, ce qui est parfaitement légal en Swift. Et <code>Song.id = UUID()</code> ne casse aucune règle de concurrence non plus — c'est un bug de logique métier (l'identité d'une valeur), pas un bug de thread-safety. Le compilateur ne peut vérifier que ce qu'il modélise ; la cohérence d'une identité entre deux instances, ou la propagation d'une annulation à travers un pont manuel comme <code>AsyncStream</code>, restent hors de sa portée.</p>
+  </details>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build du projet (⌘B) : doit réussir sans erreur.</li>
+      <li>Lance un téléchargement, quitte l'écran avant la fin (ou appelle <code>cancelDownload()</code>) : la chanson ne doit <strong>pas</strong> apparaître dans la bibliothèque téléchargée.</li>
+      <li>Place un breakpoint (ou un <code>print</code>) dans <code>onTermination</code> de <code>DownloadSongUseCase</code> : vérifie qu'il se déclenche bien quand le téléchargement est annulé côté ViewModel.</li>
+      <li>Écris un test rapide (ou vérifie à la main dans le debugger) : deux <code>Song(title: "Kashmir", artist: "Led Zeppelin", ...)</code> construits séparément doivent maintenant avoir le même <code>id</code>.</li>
+      <li>Relance un téléchargement déjà terminé une deuxième fois : <code>storage.contains(song)</code> doit désormais fonctionner correctement même si le <code>Song</code> vient d'un endroit différent du code.</li>
+      <li>Dans <code>CachedLyricsRepository.swift</code>, vérifie les deux <code>await</code> ajoutés devant <code>cache[song.id]</code> — nécessaires tant que <code>Song.id</code> reste une propriété calculée sans <code>nonisolated</code>.</li>
+      <li>Quitte <code>SongOptionsSheet</code> pendant un téléchargement en cours (swipe pour fermer la sheet) : vérifie que <code>.onDisappear</code> déclenche bien <code>cancelDownload()</code>.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>Task</code> de <code>DownloadSongUseCase</code> non référencée, jamais annulée</td><td><code>let task = Task { ... }</code> + <code>continuation.onTermination</code> annule la Task interne</td></tr>
+    <tr><td><code>repository.add(song)</code> appelé même après annulation</td><td>Gardé derrière <code>if !Task.isCancelled</code></td></tr>
+    <tr><td><code>Task</code> de <code>SongDownloadViewModel</code> non référencée, aucun moyen d'annuler</td><td><code>private var downloadTask</code> stockée + <code>cancelDownload()</code> déclenché par <code>.onDisappear</code></td></tr>
+    <tr><td><code>Song.id = UUID()</code> : nouvel identifiant à chaque instanciation</td><td><code>var id: String</code> calculé depuis <code>artist</code>/<code>title</code>, stable et déterministe</td></tr>
+    <tr><td><code>storage.contains(song)</code> et le cache de <code>CachedLyricsRepository</code> reposent sur une identité qui ne matche jamais entre deux instanciations séparées</td><td>Deux <code>Song</code> représentant la même chanson sont désormais toujours égaux</td></tr>
+    <tr><td><code>cache[song.id]</code> compilait sans <code>await</code> (id stocké, exempté par SE-0434)</td><td><code>await cache[song.id]</code> nécessaire (id calculé, non exempté — <code>nonisolated</code> explicite recommandé)</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source</div>
+    <code>audits/2026-07-28-clean-architecture-audit.md</code> — points #1 et #2 de la section 2 (les deux bugs marqués BUG PROD).<br>
+    <code>docs/swift6-isolation-bonnes-pratiques.md</code> — table des anti-patterns, ligne <code>Task { }</code> sans référence stockée.<br>
+    <a href="0019-concurrence-nonisolated-actor.html">Leçon 19</a> — où <code>actor</code>/<code>nonisolated</code>/<code>Sendable</code> ont été posés comme garde-fous du compilateur ; cette leçon montre leurs angles morts.<br>
+    <a href="https://forums.swift.org/t/why-asyncstream-breaks-structured-concurrency/71477">Swift Forums — "Why AsyncStream breaks structured concurrency"</a> — confirme que l'annulation d'une Task consommatrice ne se propage pas automatiquement à une Task créée à l'intérieur d'une closure <code>AsyncStream</code>, d'où le besoin explicite de <code>onTermination</code>.<br>
+    <a href="https://developer.apple.com/documentation/swift/asyncstream/continuation/ontermination">AsyncStream.Continuation.onTermination</a> (Apple Developer Documentation) — confirme explicitement que l'annulation de la Task consommatrice déclenche <code>onTermination</code> avec le cas <code>.cancelled</code>, distinct de <code>.finished</code>.<br>
+    <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0466-control-default-actor-isolation.md">SE-0466</a> — <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code>, la règle générale.<br>
+    <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0434-global-actor-isolated-types-usability.md">SE-0434</a> — l'exception précise qui rend les propriétés <em>stockées</em> <code>Sendable</code> <code>nonisolated</code> par inférence, et qui explique pourquoi <code>song.id</code> (désormais calculé) n'en bénéficie plus.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi la Task interne à <code>DownloadSongUseCase</code> continue-t-elle de tourner même quand la vue qui l'affiche disparaît ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce qu'AsyncStream ignore toujours l'annulation par conception</label>
+    <label><input type="radio" name="q1" value="b"> Parce que l'annulation d'une Task consommatrice ne se propage pas automatiquement à une Task créée dans la closure AsyncStream</label>
+    <label><input type="radio" name="q1" value="c"> Parce que repository.add(song) empêche techniquement toute annulation</label>
+    <label><input type="radio" name="q1" value="d"> Parce que continuation.yield bloque le thread principal jusqu'à la fin</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">2. Quel est le rôle exact de <code>continuation.onTermination</code> dans la correction ?</p>
+    <label><input type="radio" name="q2" value="a"> Il relance automatiquement le téléchargement en cas d'échec réseau</label>
+    <label><input type="radio" name="q2" value="b"> Il empêche continuation.finish() d'être appelé deux fois</label>
+    <label><input type="radio" name="q2" value="c"> Il signale au producteur que le consommateur a arrêté d'itérer, pour qu'il annule sa propre Task</label>
+    <label><input type="radio" name="q2" value="d"> Il transforme la Task interne en enfant structuré de la Task appelante</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi corriger uniquement <code>DownloadSongUseCase</code> ne suffit-il pas à résoudre le bug en pratique ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que rien ne signale jamais l'arrêt côté SongDownloadViewModel tant que sa propre Task n'est pas annulable</label>
+    <label><input type="radio" name="q3" value="b"> Parce que DownloadSongUseCase n'est techniquement pas Sendable</label>
+    <label><input type="radio" name="q3" value="c"> Parce que SongDownloadViewModel n'est pas annoté @MainActor</label>
+    <label><input type="radio" name="q3" value="d"> Parce que le compilateur refuse de compiler DownloadSongUseCase seul</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">4. Pourquoi <code>Song.id = UUID()</code> casse-t-il concrètement <code>storage.contains(song)</code> dans <code>SimpleDownloadedSongsRepository</code> ?</p>
+    <label><input type="radio" name="q4" value="a"> contains ne fonctionne que sur des tableaux triés</label>
+    <label><input type="radio" name="q4" value="b"> SimpleDownloadedSongsRepository n'est pas un actor</label>
+    <label><input type="radio" name="q4" value="c"> UUID n'est techniquement pas conforme à Hashable</label>
+    <label><input type="radio" name="q4" value="d"> Chaque Song reconstruit obtient un id différent, donc n'est jamais égal à une valeur déjà stockée</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">5. Pourquoi ce bug d'identité reste-t-il aujourd'hui latent avec <code>mockPlaylist</code> ?</p>
+    <label><input type="radio" name="q5" value="a"> Parce que Song ne conforme pas encore à Identifiable dans le mock</label>
+    <label><input type="radio" name="q5" value="b"> Parce que mockPlaylist est une constante globale évaluée une seule fois, donc chaque Song garde le même id toute la session</label>
+    <label><input type="radio" name="q5" value="c"> Parce que le compilateur remplace UUID() par une valeur fixe en mode debug</label>
+    <label><input type="radio" name="q5" value="d"> Parce que CachedLyricsRepository ne s'exécute jamais avec des données mock</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">6. En quoi ces trois bugs sont-ils différents de ceux corrigés en Leçons 22 et 25 ?</p>
+    <label><input type="radio" name="q6" value="a"> Ils ne concernent aucun fichier du dossier Domain</label>
+    <label><input type="radio" name="q6" value="b"> Ils n'impliquent aucune notion de Task ou de Sendable</label>
+    <label><input type="radio" name="q6" value="c"> Ils compilent sans erreur — le compilateur Swift 6 ne les détecte pas, contrairement aux erreurs d'isolation</label>
+    <label><input type="radio" name="q6" value="d"> Ils n'ont aucun rapport avec les points listés dans l'audit</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">7. Pourquoi <code>cache[song.id]</code> réclame-t-il désormais <code>await</code> dans <code>CachedLyricsRepository</code>, alors que ce n'était pas le cas avant que <code>id</code> devienne une propriété calculée ?</p>
+    <label><input type="radio" name="q7" value="a"> Parce que String n'est techniquement pas conforme à Sendable, contrairement à UUID</label>
+    <label><input type="radio" name="q7" value="b"> Parce que CachedLyricsRepository a cessé d'être un actor à cette occasion</label>
+    <label><input type="radio" name="q7" value="c"> Parce que SE-0434 exempte les propriétés stockées Sendable, mais pas les propriétés calculées</label>
+    <label><input type="radio" name="q7" value="d"> Parce que Song.ID a changé de type sans que la signature du cache soit mise à jour</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">8. Pourquoi la correction <code>.onDisappear { downloadViewModel?.cancelDownload() }</code> est-elle préférée à un <code>deinit</code> sur le ViewModel ?</p>
+    <label><input type="radio" name="q8" value="a"> Le timing de désallocation d'un @State géré par SwiftUI n'est pas garanti immédiat, contrairement à ce signal explicite</label>
+    <label><input type="radio" name="q8" value="b"> Un deinit ne peut techniquement jamais appeler une méthode annotée @MainActor</label>
+    <label><input type="radio" name="q8" value="c"> SongDownloadViewModel n'est physiquement pas capable de définir un deinit</label>
+    <label><input type="radio" name="q8" value="d"> onDisappear s'exécute automatiquement avant chaque annulation de Task</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le breakpoint dans <code>onTermination</code> ne se déclenche jamais, même après avoir annulé le téléchargement ? Vérifie d'abord que <code>SongDownloadViewModel</code> annule bien sa propre <code>Task</code> — sans ça, le <code>for await</code> du ViewModel continue d'itérer, donc rien ne signale au stream qu'il doit se terminer. Pose la question si le lien entre les deux Task reste flou.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0025-inverser-dependance-protocoles-domain.html">← Leçon 25 : inverser la dépendance sur les protocoles</a></span>
+    <span>Leçon suivante : le service de téléchargement devient réel (Container, throwing, CancellationError)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

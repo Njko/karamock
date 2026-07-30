@@ -30,15 +30,13 @@ Domain (UseCase) ──dépend de──▶ Domain/Interfaces (protocole)</code><
   <h2>Quatre protocoles, un seul geste répété</h2>
   <table class="compare-table">
     <tr><th>Protocole</th><th>Avant</th><th>Après</th></tr>
-    <tr><td><code>LyricsRepository</code></td><td><code>Repositories/CachedLyricsRepository.swift</code></td><td><code>Domain/Interfaces/LyricsRepository.swift</code></td></tr>
-    <tr><td><code>DownloadedSongsRepository</code></td><td><code>Repositories/DownloadedSongsRepository.swift</code></td><td><code>Domain/Interfaces/DownloadedSongsRepository.swift</code></td></tr>
-    <tr><td><code>SongDownloading</code></td><td><code>Services/SongDownloading.swift</code></td><td><code>Domain/Interfaces/SongDownloading.swift</code></td></tr>
-    <tr><td><code>LyricsFetching</code></td><td><code>Services/LyricsFetching.swift</code></td><td><code>Domain/Interfaces/LyricsFetching.swift</code></td></tr>
+    <tr><td><code>LyricsRepository</code></td><td><code>Repositories/CachedLyricsRepository.swift</code></td><td><code>Domain/Interfaces/Repositories/LyricsRepository.swift</code></td></tr>
+    <tr><td><code>DownloadedSongsRepository</code></td><td><code>Repositories/DownloadedSongsRepository.swift</code></td><td><code>Domain/Interfaces/Repositories/DownloadedSongsRepository.swift</code></td></tr>
+    <tr><td><code>SongDownloading</code></td><td><code>Services/SongDownloading.swift</code></td><td><code>Domain/Interfaces/Services/SongDownloading.swift</code></td></tr>
+    <tr><td><code>LyricsFetching</code></td><td><code>Services/LyricsFetching.swift</code></td><td><code>Domain/Interfaces/Services/LyricsFetching.swift</code></td></tr>
   </table>
-  <p>Pour chacun, la déclaration du protocole quitte son fichier d'origine ; l'implémentation concrète y reste seule. Exemple complet sur <code>LyricsRepository</code> :</p>
-  <pre><code>// NOUVEAU — Domain/Interfaces/LyricsRepository.swift
-import Foundation
-
+  <p>Un sous-dossier <code>Repositories/</code> et un sous-dossier <code>Services/</code> à l'intérieur de <code>Domain/Interfaces/</code> — même découpage que celui déjà utilisé côté implémentation, appliqué cette fois aux contrats. Pour chacun, la déclaration du protocole quitte son fichier d'origine ; l'implémentation concrète y reste seule, et peut au passage prendre le nom du type concret plutôt que celui du protocole disparu (<code>Services/SongDownloading.swift</code> devient <code>Services/MockSongDownloading.swift</code>, par exemple — le fichier ne contient plus que ça). Exemple complet sur <code>LyricsRepository</code> :</p>
+  <pre><code>// NOUVEAU — Domain/Interfaces/Repositories/LyricsRepository.swift
 nonisolated protocol LyricsRepository: Sendable {
     func lyrics(for song: Song) async throws(LyricsError) -> [LyricsLine]
 }</code></pre>
@@ -59,13 +57,46 @@ actor CachedLyricsRepository: LyricsRepository {
 }</code></pre>
   <p>Les trois autres suivent exactement le même geste : le protocole (avec son <code>Sendable</code>, son éventuel <code>nonisolated</code>, ses signatures) part tel quel dans <code>Domain/Interfaces/</code> ; la struct ou l'actor qui le concrétise reste dans <code>Repositories/</code> ou <code>Services/</code>, en gardant seulement les imports dont elle a vraiment besoin (<code>URLSessionLyricsFetching</code> garde <code>import os</code> pour son <code>Logger</code>, par exemple — le protocole <code>LyricsFetching</code>, lui, n'en a besoin d'aucun).</p>
 
-  <h2><code>LyricsFetching</code> gagne un <code>nonisolated</code> manquant</h2>
-  <p>En le déplaçant, un détail signalé par l'audit (point 3.7) se corrige au passage : <code>LyricsRepository</code> et <code>DownloadedSongsRepository</code> sont déjà déclarés <code>nonisolated protocol ... : Sendable</code> (depuis la Leçon 7 et sa correction) — <code>LyricsFetching</code>, ajouté en Leçon 22, avait été oublié :</p>
-  <pre><code>// NOUVEAU — Domain/Interfaces/LyricsFetching.swift
+  <h2>Une incohérence de nommage à corriger avant de continuer</h2>
+  <p>En construisant cette extraction, une question se pose naturellement : les protocoles <code>Services/</code> devraient-ils, eux aussi, porter un nom qui rappelle leur couche — <code>SongDownloadingService</code>, <code>LyricsFetchingService</code> — pour rester lisibles à côté de <code>LyricsRepository</code>/<code>DownloadedSongsRepository</code> ? La tentation est réelle : ranger les quatre protocoles dans deux sous-dossiers symétriques (<code>Repositories/</code>, <code>Services/</code>) donne envie de leur donner des noms symétriques aussi.</p>
+  <p>Mais les <a href="https://www.swift.org/documentation/api-design-guidelines/">Swift API Design Guidelines</a> officielles répondent précisément à ce cas, avec deux règles distinctes selon ce qu'un protocole décrit :</p>
+  <ul>
+    <li><em>"Protocols that describe <strong>what something is</strong> should read as nouns"</em> (exemple cité : <code>Collection</code>) — c'est le cas de <code>LyricsRepository</code>/<code>DownloadedSongsRepository</code> : un repository <em>est</em> une chose, un nom suffit.</li>
+    <li><em>"Protocols that describe a <strong>capability</strong> should be named using the suffixes <code>able</code>, <code>ible</code>, or <code>ing</code>"</em> (exemple cité : <code>ProgressReporting</code>) — c'est le cas de <code>SongDownloading</code>/<code>LyricsFetching</code> : ils décrivent une capacité ("sait télécharger", "sait récupérer des paroles"), pas une identité. Le suffixe <code>-ing</code> qu'ils portent déjà remplit exactement ce rôle.</li>
+  </ul>
+  <p>Ajouter <code>Service</code> par-dessus un nom déjà en <code>-ing</code> double le signal (la capacité est indiquée deux fois : une fois par <code>-ing</code>, une fois par <code>Service</code>) sans rien clarifier de plus — et casse la symétrie avec les deux protocoles Repository, qui eux n'ont jamais eu besoin d'un suffixe de couche pour être clairs. Le nom du <em>dossier</em> peut légitimement s'appeler <code>Services/</code> (c'est une étiquette d'organisation, pas un identifiant Swift) sans que le <em>type</em> ait besoin de répéter ce mot. Nicolas a suivi cette recommandation : <code>SongDownloading</code> et <code>LyricsFetching</code> ont retrouvé leur nom d'origine (renommage Xcode, répercuté partout où <code>SongDownloadingService</code>/<code>LyricsFetchingService</code> étaient utilisés — <code>KaramockContainer.swift</code>, <code>DownloadSongUseCase</code>, <code>CachedLyricsRepository</code>, les deux structs concrètes).</p>
+
+  <h2><code>nonisolated</code> sur les deux protocoles Service : un changement qui s'est propagé</h2>
+  <p>En même temps que le renommage, Nicolas a ajouté <code>nonisolated</code> aux deux protocoles Service — pas seulement <code>LyricsFetching</code> (visé par l'audit, point 3.7) mais aussi <code>SongDownloading</code>, pour une cohérence totale entre les 4 protocoles :</p>
+  <pre><code>// Domain/Interfaces/Services/LyricsFetching.swift
 nonisolated protocol LyricsFetching: Sendable {
     func fetchLyrics(artist: String, title: String) async throws(LyricsError) -> String
+}
+
+// Domain/Interfaces/Services/SongDownloading.swift
+nonisolated protocol SongDownloading: Sendable {
+    func download(_ song: Song) -> AsyncStream<Double>
 }</code></pre>
-  <p>Ce n'est pas un bug qui empêchait de compiler — sinon Nicolas l'aurait vu dès la Leçon 22. C'est une incohérence stylistique entre protocoles frères qui jouent exactement le même rôle : les quatre décrivent un contrat asynchrone, <code>Sendable</code>, dont l'isolation ne doit dépendre d'aucun acteur particulier. Aligner <code>LyricsFetching</code> sur ses trois voisins retire une question qu'un futur lecteur du code se poserait sinon ("pourquoi celui-ci est différent ?") — le genre de détail que la Leçon 19 avait déjà rendu familier.</p>
+  <p>Pour <code>SongDownloading</code>, ce changement n'a rien cassé ailleurs : <code>MockSongDownloading.download</code> n'appelle que <code>Task</code>, <code>Task.sleep</code> et son <code>AsyncStream.Continuation</code> — des primitives de concurrence qui ne dépendent d'aucun réglage d'isolation par défaut du module. Pour <code>LyricsFetching</code>, en revanche, ce même changement a exigé trois corrections dans <code>URLSessionLyricsFetching.swift</code> pour continuer à compiler — la vraie raison d'être de cette section.</p>
+
+  <details class="aside">
+    <summary>Pourquoi rendre <code>LyricsFetching</code> nonisolated a cassé la compilation ailleurs</summary>
+    <p><code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> rend <strong>toute</strong> déclaration non annotée du module implicitement <code>@MainActor</code> — pas seulement les protocoles, mais aussi les fonctions libres et les constantes globales. Tant que <code>LyricsFetching</code> était lui-même implicitement <code>@MainActor</code> (faute de <code>nonisolated</code>), <code>URLSessionLyricsFetching.fetchLyrics</code> l'était aussi pour le satisfaire — et tout ce qu'il appelait à l'intérieur (une fonction libre, une constante globale, également <code>@MainActor</code> par défaut) était sur le <em>même</em> acteur : aucune frontière, aucun <code>await</code> nécessaire. Rendre le protocole <code>nonisolated</code> retire ce filet : <code>fetchLyrics</code> devient nonisolated à son tour pour continuer à satisfaire le contrat, mais tout ce qu'il appelait reste, lui, implicitement <code>@MainActor</code> — et une frontière apparaît là où il n'y en avait pas avant. Trois croisements sont devenus visibles d'un coup :</p>
+    <pre><code>// AVANT — tout tournait silencieusement sur le Main Actor, aucun await nécessaire
+guard let url = lyricsURL(artist: artist, title: title) else { throw .invalidURL }
+// ...
+lyricsFetcherLogger.error("Echec reseau lyrics.ovh : \(error)")</code></pre>
+    <pre><code>// APRÈS — nonisolated protocol : chaque appel à une déclaration restée @MainActor doit franchir la frontière
+guard let url = await lyricsURL(artist: artist, title: title) else { throw .invalidURL }
+// ...
+await lyricsFetcherLogger.error("Echec reseau lyrics.ovh : \(error)")</code></pre>
+    <p><code>lyricsURL</code> (fonction libre privée) et <code>lyricsFetcherLogger</code> (constante globale) sont toutes les deux non annotées, donc <code>@MainActor</code> par défaut, exactement comme <code>durationInSeconds</code> l'était avant sa correction en Leçon 22 — le même mécanisme, révélé cette fois à trois endroits différents plutôt qu'un seul. Un troisième cas, plus strict, a demandé une solution différente :</p>
+    <pre><code>nonisolated private struct LyricsResponse: Decodable {
+    let lyrics: String
+}</code></pre>
+    <p><code>JSONDecoder().decode(LyricsResponse.self, from: data)</code> est un appel <strong>synchrone</strong>, pas <code>async</code> — impossible d'y ajouter <code>await</code>. Si l'initialiseur synthétisé de <code>LyricsResponse</code> était resté implicitement <code>@MainActor</code>, le décoder depuis <code>fetchLyrics</code> (devenu nonisolated) aurait été un blocage réel, pas juste un <code>await</code> manquant — un appel synchrone ne peut pas franchir une frontière d'acteur en cours de route. <code>LyricsResponse</code> a donc dû devenir <code>nonisolated</code> directement, plutôt que d'ajouter un <code>await</code> impossible à écrire.</p>
+    <p>La leçon à retenir dépasse ce seul fichier : rendre <em>un</em> protocole <code>nonisolated</code> ne change rien en soi — mais ça retire l'appartenance implicite au Main Actor qui, jusque-là, mettait tout le monde d'accord par défaut. Chaque déclaration que la nouvelle isolation "nonisolated" touche et qui était restée <code>@MainActor</code> par défaut devient une frontière à traiter, une par une, révélée par le compilateur.</p>
+  </details>
 
   <details class="aside">
     <summary>Pourquoi ce déplacement ne change rien à l'exécution</summary>
@@ -77,21 +108,27 @@ nonisolated protocol LyricsFetching: Sendable {
     <ol>
       <li>Build du projet (⌘B) : doit réussir sans erreur — comme la Leçon 24, c'est un pur déplacement.</li>
       <li>N'importe quel écran déjà fonctionnel (téléchargement d'une chanson, affichage de paroles, bibliothèque) doit se comporter exactement comme avant — aucune régression attendue, puisque rien n'a changé au runtime.</li>
-      <li>Dans Xcode, vérifie que <code>Domain/Interfaces/</code> contient bien les 4 protocoles et que <code>Repositories/</code>/<code>Services/</code> ne contiennent plus que des implémentations concrètes.</li>
+      <li>Dans Xcode, vérifie que <code>Domain/Interfaces/</code> contient bien les 4 protocoles (répartis en <code>Repositories/</code> et <code>Services/</code>) et que <code>Repositories/</code>/<code>Services/</code> côté Data ne contiennent plus que des implémentations concrètes.</li>
+      <li>Vérifie que <code>SongDownloading</code> et <code>LyricsFetching</code> ne portent pas de suffixe <code>Service</code>, et que les 4 protocoles sont <code>nonisolated</code>.</li>
+      <li>Dans <code>URLSessionLyricsFetching.swift</code>, vérifie les 3 <code>await</code> ajoutés (appel à <code>lyricsURL</code>, deux appels à <code>lyricsFetcherLogger.error</code>) et le <code>nonisolated</code> sur <code>LyricsResponse</code> — sans eux, le fichier ne compile plus une fois <code>LyricsFetching</code> devenu nonisolated.</li>
     </ol>
   </div>
 
   <table class="compare-table">
     <tr><th>Avant</th><th>Après</th></tr>
-    <tr><td>4 protocoles déclarés dans leur fichier d'implémentation (Data)</td><td>4 protocoles regroupés dans <code>Domain/Interfaces/</code></td></tr>
+    <tr><td>4 protocoles déclarés dans leur fichier d'implémentation (Data)</td><td>4 protocoles regroupés dans <code>Domain/Interfaces/Repositories/</code> et <code>Domain/Interfaces/Services/</code></td></tr>
     <tr><td>Domain dépend d'un détail d'organisation de Data</td><td>Data implémente une abstraction possédée par Domain (DIP respecté)</td></tr>
-    <tr><td><code>LyricsFetching</code> sans <code>nonisolated</code>, différent de ses 3 voisins</td><td>Les 4 protocoles suivent la même convention <code>nonisolated protocol : Sendable</code></td></tr>
+    <tr><td><code>LyricsFetching</code>/<code>SongDownloading</code> sans <code>nonisolated</code>, différents de leurs 2 voisins Repository</td><td>Les 4 protocoles suivent la même convention <code>nonisolated protocol : Sendable</code></td></tr>
+    <tr><td>Tentation de renommer en <code>SongDownloadingService</code>/<code>LyricsFetchingService</code></td><td><code>-ing</code> suffit déjà (Swift API Design Guidelines) ; <code>Service</code> resterait un nom de dossier, pas de type</td></tr>
+    <tr><td><code>lyricsURL</code>/<code>lyricsFetcherLogger</code>/<code>LyricsResponse</code> silencieusement <code>@MainActor</code> par défaut</td><td>3 <code>await</code> + <code>nonisolated</code> sur <code>LyricsResponse</code>, frontières rendues explicites</td></tr>
   </table>
 
   <div class="source-box">
     <div class="source-label">Source</div>
     <code>audits/2026-07-28-clean-architecture-audit.md</code> — section 2 (point #4) et section 3.4 (point 3.7) — l'audit qui motive cette leçon.<br>
-    <a href="0007-domain-usecase-et-repository.html">Leçon 7</a> — où la distinction Service/Repository et la convention <code>nonisolated protocol : Sendable</code> ont été posées la première fois.
+    <a href="0007-domain-usecase-et-repository.html">Leçon 7</a> — où la distinction Service/Repository et la convention <code>nonisolated protocol : Sendable</code> ont été posées la première fois.<br>
+    <a href="0022-reseau-urlsession-lyrics-ovh.html">Leçon 22</a> — le premier cas rencontré du même mécanisme (<code>Song.durationInSeconds</code> rendu <code>nonisolated</code>).<br>
+    <a href="https://www.swift.org/documentation/api-design-guidelines/">Swift API Design Guidelines</a> (swift.org) — section sur le nommage des protocoles ("what something is" → nom ; "a capability" → suffixe <code>-able</code>/<code>-ible</code>/<code>-ing</code>).
   </div>
 
   <h2>Vérifie ta compréhension</h2>
@@ -136,11 +173,41 @@ nonisolated protocol LyricsFetching: Sendable {
     <p class="quiz-feedback"></p>
   </div>
 
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">5. Pourquoi ne pas renommer <code>SongDownloading</code> en <code>SongDownloadingService</code> ?</p>
+    <label><input type="radio" name="q5" value="a"> Le suffixe -ing suffit déjà à désigner une capacité, Service ne fait que le répéter</label>
+    <label><input type="radio" name="q5" value="b"> Un nom de protocole Swift ne peut techniquement pas dépasser deux mots</label>
+    <label><input type="radio" name="q5" value="c"> FactoryKit interdit les noms de type contenant le mot Service</label>
+    <label><input type="radio" name="q5" value="d"> Cela empêcherait MockSongDownloading de conformer au protocole</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">6. Pourquoi <code>URLSessionLyricsFetching.swift</code> a-t-il eu besoin de 3 <code>await</code> supplémentaires après avoir rendu <code>LyricsFetching</code> nonisolated, alors que <code>MockSongDownloading.swift</code> n'a rien changé ?</p>
+    <label><input type="radio" name="q6" value="a"> MockSongDownloading est un actor, contrairement à URLSessionLyricsFetching</label>
+    <label><input type="radio" name="q6" value="b"> URLSessionLyricsFetching contient une erreur de syntaxe non liée à ce changement</label>
+    <label><input type="radio" name="q6" value="c"> fetchLyrics appelle une fonction libre et une constante globale restées @MainActor par défaut, contrairement au corps de download</label>
+    <label><input type="radio" name="q6" value="d"> Logger.error est toujours async, quel que soit le réglage d'isolation du module</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">7. Pourquoi <code>LyricsResponse</code> a-t-il dû devenir <code>nonisolated</code> plutôt que d'ajouter un <code>await</code> devant <code>JSONDecoder().decode(...)</code> ?</p>
+    <label><input type="radio" name="q7" value="a"> LyricsResponse n'est jamais réellement utilisé par JSONDecoder dans ce fichier</label>
+    <label><input type="radio" name="q7" value="b"> Decodable interdit par nature toute forme d'isolation d'acteur sur ses types</label>
+    <label><input type="radio" name="q7" value="c"> nonisolated ne peut jamais s'appliquer à une struct, seulement à des fonctions</label>
+    <label><input type="radio" name="q7" value="d"> decode(_:from:) est un appel synchrone, où ajouter await est impossible</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
   <p class="ask-teacher">Une erreur "Cannot find type X in scope" apparaît après avoir déplacé un protocole ? Même piste qu'en Leçon 24 : vérifie le Target Membership du nouveau fichier dans le File Inspector. Une conformité qui semble "disparaître" est presque toujours un problème de cible, pas de code.</p>
 
   <div class="lesson-nav">
     <span><a href="0024-domain-modeles-hors-des-views.html">← Leçon 24 : les modèles de domaine hors des Views</a></span>
-    <span>Leçon suivante : deux vrais bugs de concurrence (Task orpheline, identité de Song)</span>
+    <span><a href="0026-bugs-concurrence-task-orpheline-identite.html">Leçon 26 : deux vrais bugs de concurrence (Task orpheline, identité de Song) →</a></span>
   </div>
 
 </div>
