@@ -61,4 +61,15 @@ extension Container {
     var songDownloadViewModel: ParameterFactory<Song, SongDownloadViewModel> {
         self { song in SongDownloadViewModel(song:song, downloadSong: self.downloadSong()) }
     }
+    
+    @MainActor
+    var songOptionsViewModel: ParameterFactory<Song, SongOptionsViewModel> {
+        self { song in
+            SongOptionsViewModel(
+                song: song,
+                player: self.player(),
+                downloadViewModel: self.songDownloadViewModel(song)
+            )
+        }
+    }
 }
