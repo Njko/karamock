@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 29 — Nettoyage : SongOptionsSheet gagne enfin son ViewModel</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 29 · Nettoyage architecture (6/N)</p>
+  <h1>SongOptionsSheet gagne enfin son ViewModel</h1>
+  <p class="subtitle">Depuis la Leçon 22, chaque écran avec une vraie logique passe par un ViewModel. <code>SongOptionsSheet</code> est le dernier à y échapper : cinq <code>@State</code> locaux et une mutation directe de <code>PlayerState</code> vivent encore dans la View. Cette leçon applique le même geste qu'en Leçon 22 — et explique pourquoi elle ne l'applique <em>pas</em> à <code>DiscoveryView</code>, contrairement à ce que suggère l'audit.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> "toujours passer par un ViewModel" n'est pas une règle à suivre aveuglément — c'est un principe à appliquer là où il y a une vraie logique à isoler, et à ne pas appliquer là où il n'y en a pas encore. Savoir distinguer les deux cas, avec un exemple concret de chaque côté, est exactement ce qu'un entretien Tech Lead teste.
+  </div>
+
+  <h2>Ce que l'audit a trouvé — et où il faut le nuancer</h2>
+  <p>Section 3.3 de l'audit, "Views manquant un ViewModel" : <em>"<code>DiscoveryView</code> → données mockées hardcodées, aucun VM"</em> et <em>"<code>SongOptionsSheet</code> → 5 <code>@State</code> locaux + logique métier inline"</em>. Deux cas présentés côte à côte, avec la même sévérité — mais qui ne se ressemblent pas une fois qu'on regarde le code réel de chacun.</p>
+  <p><code>DiscoveryView</code> aujourd'hui :</p>
+  <pre><code>struct DiscoveryView: View {
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    PlaylistSection(playlists: mockPlaylist)
+                }
+                .padding(.top)
+            }
+            .navigationTitle("Découvrir")
+            .navigationDestination(for: Playlist.self) { playlist in
+                PlaylistDetailView(playlist: playlist)
+            }
+        }
+    }
+}</code></pre>
+  <p>Il n'y a rien à extraire : aucun état mutable, aucun appel réseau, aucune branche conditionnelle — juste une constante affichée telle quelle. Un <code>DiscoveryViewModel</code> aujourd'hui contiendrait exactement une ligne (<code>let playlists = mockPlaylist</code>) et ne ferait rien d'autre que renommer <code>mockPlaylist</code> en <code>viewModel.playlists</code>. Ce serait une abstraction sans travail à faire, ajoutée pour satisfaire une checklist plutôt qu'un besoin réel — le jour où <code>DiscoveryView</code> devra vraiment charger des playlists (une source de données réelle, un état de chargement, une erreur réseau), ce sera le bon moment pour lui donner un ViewModel, pas avant. Cette leçon laisse donc <code>DiscoveryView</code> tel quel, et se concentre sur le cas qui a une vraie justification.</p>
+
+  <h2><code>SongOptionsSheet</code> : le cas qui, lui, justifie un ViewModel</h2>
+  <pre><code>// Views/Discovery/PlaylistDetail/SongOptionSheet/SongOptionsSheet.swift — ACTUEL (extrait)
+struct SongOptionsSheet: View {
+    @Injected(\.player) private var player
+    @Environment(\.dismiss) private var dismiss
+
+    let song: Song
+
+    @State private var downloadViewModel: SongDownloadViewModel?
+
+    @State private var mode: KaraokeMode = .karaoke
+    @State private var singerName: String = ""
+    @State private var adjustVolumes = false
+    @State private var pitch: Double = 0
+    @State private var tempo: Double = 0
+
+    var body: some View {
+        // ...
+        Button("Jouer maintenant") {
+            player.currentSong = song
+            player.isPlaying = true
+            player.isExpanded = true
+            dismiss()
+        }
+        // ...
+    }
+}</code></pre>
+  <p>Ici, contrairement à <code>DiscoveryView</code>, il y a une vraie logique : cinq valeurs de configuration mutables, et une action ("Jouer maintenant") qui modifie directement <code>PlayerState</code> — un objet <em>partagé</em>, injecté via <code>@Injected(\.player)</code>, dont la mutation depuis une View est exactement le genre de logique métier qu'un ViewModel doit porter (elle doit pouvoir être testée sans instancier de View).</p>
+  <pre><code>// NOUVEAU — ViewModels/SongOptionsViewModel.swift
+@MainActor
+@Observable
+final class SongOptionsViewModel {
+    private let song: Song
+    private let player: PlayerState
+
+    let downloadViewModel: SongDownloadViewModel
+
+    var mode: KaraokeMode = .karaoke
+    var singerName: String = ""
+    var adjustVolumes = false
+    var pitch: Double = 0
+    var tempo: Double = 0
+
+    init(song: Song, player: PlayerState, downloadViewModel: SongDownloadViewModel) {
+        self.song = song
+        self.player = player
+        self.downloadViewModel = downloadViewModel
+    }
+
+    func playNow() {
+        player.currentSong = song
+        player.isPlaying = true
+        player.isExpanded = true
+    }
+}</code></pre>
+  <p><code>downloadViewModel</code> n'est pas recréé — il devient une propriété de <code>SongOptionsViewModel</code>, composée à la construction plutôt que récupérée séparément par la View (voir Container ci-dessous). <code>dismiss()</code>, lui, reste dans la View : <code>@Environment(\.dismiss)</code> est un mécanisme de navigation propre à SwiftUI, sans équivalent côté ViewModel — fermer un écran est une responsabilité de la View, changer l'état de lecture est une responsabilité métier. La différence n'est pas cosmétique : l'un se teste avec <code>@Test</code> et un <code>PlayerState</code> factice, l'autre ne se teste qu'avec un framework d'UI.</p>
+
+  <h2>Un optionnel qui n'a pas de raison d'être</h2>
+  <p>Vérification faite sur l'implémentation réelle : <code>downloadViewModel</code> a été déclaré <code>Optional</code>, avec une valeur par défaut <code>nil</code> :</p>
+  <pre><code>// ViewModels/SongOptionsViewModel.swift — IMPLÉMENTATION RÉELLE
+var downloadViewModel: SongDownloadViewModel?
+
+init(song: Song, player: PlayerState, downloadViewModel: SongDownloadViewModel? = nil) {
+    self.song = song
+    self.player = player
+    self.downloadViewModel = downloadViewModel
+}</code></pre>
+  <p>Or <code>songOptionsViewModel</code>, la seule Factory qui construit ce type en production, fournit <em>toujours</em> un vrai <code>SongDownloadViewModel</code> — jamais <code>nil</code>. Rien dans le code de production ne peut jamais faire exister un <code>SongOptionsViewModel</code> sans son <code>downloadViewModel</code>. Ce paramètre par défaut n'existe donc que pour un usage : simplifier la construction d'un <code>SongOptionsViewModel</code> dans un test qui ne s'intéresse pas au téléchargement (<code>SongOptionsViewModel(song: ..., player: ...)</code>, sans troisième argument).</p>
+  <p>C'est exactement la même catégorie de problème que la Leçon 28 a corrigée ailleurs (<code>shouldFail</code> sur <code>MockSongDownloading</code>, un besoin de test qui s'était glissé dans un type de production) : une commodité de test qui s'infiltre dans la forme du type livré, forçant tout le monde — y compris la View, en usage normal, où ce cas ne se produit jamais — à gérer un cas qui n'existe pas vraiment :</p>
+  <pre><code>// Conséquence dans SongOptionsSheet : deux déballages qui ne servent jamais à rien en production
+.onDisappear {
+    viewModel?.downloadViewModel?.cancelDownload()   // le deuxième ? ne protège contre rien de réel
+}
+// ...
+if let downloadViewModel = viewModel.downloadViewModel {   // toujours vrai en pratique
+    DownloadButton(state: downloadViewModel.state, startDownload: downloadViewModel.startDownload)
+}</code></pre>
+  <p>Aucun des autres ViewModels du projet (<code>SongDownloadViewModel</code>, <code>FullScreenPlayerViewModel</code>, <code>LibraryViewModel</code>) ne recourt à ce genre de paramètre optionnel-par-commodité — leurs tests construisent l'objet complet (réel ou mock), sans jamais assouplir la signature du type lui-même. La correction recommandée est celle montrée plus haut : <code>let downloadViewModel: SongDownloadViewModel</code> non optionnel, sans valeur par défaut. Un test qui ne s'intéresse pas au téléchargement passe simplement un <code>SongDownloadViewModel</code> construit avec un <code>MockSongDownloading</code> minimal — un peu plus de code au site d'appel du test, mais un type de production qui ne peut jamais se trouver dans un état qu'il ne devrait pas pouvoir représenter.</p>
+
+  <h2>Enregistrement dans le container — un seul appel à <code>Container.shared</code>, pas deux</h2>
+  <pre><code>// KaramockContainer.swift — AJOUT
+@MainActor
+var songOptionsViewModel: ParameterFactory&lt;Song, SongOptionsViewModel&gt; {
+    self { song in
+        SongOptionsViewModel(
+            song: song,
+            player: self.player(),
+            downloadViewModel: self.songDownloadViewModel(song)
+        )
+    }
+}</code></pre>
+  <p>Composer <code>self.songDownloadViewModel(song)</code> à l'intérieur de cette Factory (même geste que <code>lyricsRepository</code> composant <code>self.lyricsFetching()</code>, Leçon 11) évite à <code>SongOptionsSheet</code> de devoir construire <em>deux</em> ViewModels séparément. La View garde exactement un seul <code>@State</code> optionnel et un seul appel à <code>Container.shared</code> dans son <code>.task</code> — ni plus, ni moins qu'avant :</p>
+  <pre><code>// CORRECTION — Views/Discovery/PlaylistDetail/SongOptionSheet/SongOptionsSheet.swift
+struct SongOptionsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let song: Song
+
+    @State private var viewModel: SongOptionsViewModel?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                SongHeader(song: song)
+
+                if let viewModel {
+                    DownloadButton(state: viewModel.downloadViewModel.state, startDownload: viewModel.downloadViewModel.startDownload)
+                    SongOptionsForm(viewModel: viewModel)
+                }
+
+                Button("Ajouter à la file d'attente") { }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.pink)
+                    .frame(maxWidth: .infinity)
+
+                Button("Jouer maintenant") {
+                    viewModel?.playNow()
+                    dismiss()
+                }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding()
+        }
+        .onDisappear {
+            viewModel?.downloadViewModel.cancelDownload()
+        }
+        .task {
+            if viewModel == nil {
+                viewModel = Container.shared.songOptionsViewModel(song)
+            }
+        }
+    }
+}</code></pre>
+  <p>Le fait que <code>SongOptionsSheet</code> appelle encore <code>Container.shared</code> une fois, depuis <code>.task</code>, n'est pas un oubli : c'est la limite déjà actée en Leçon 12 et reconfirmée à la Leçon 22 — une View a besoin d'un point d'entrée pour obtenir son ViewModel, et SwiftUI ne propose rien d'équivalent à un <code>SavedStateHandle</code> pour éviter ça proprement. Cette leçon ne cherche pas à faire disparaître cet appel, seulement à s'assurer qu'il n'y en ait qu'un, et que tout ce qui peut être délégué au ViewModel le soit.</p>
+
+  <h2><code>SongOptionsForm</code> : où vivent les <code>@Bindable</code></h2>
+  <p>Les <code>@State</code> devenus des <code>var</code> sur <code>SongOptionsViewModel</code> ont besoin de <code>Binding</code> pour <code>TextField</code>/<code>Toggle</code>/<code>Slider</code>. La Leçon 10 a établi <code>@Bindable var x = x</code> pour ce genre de cas — mais toujours en toute première ligne de <code>body</code>, une contrainte empirique observée avec <code>@Injected</code>, jamais documentée officiellement comme règle générale. Plutôt que risquer ce placement dans le corps déjà long de <code>SongOptionsSheet</code> (et surtout, <code>viewModel</code> y est <code>Optional</code> — <code>@Bindable</code> n'accepte pas <code>Optional&lt;T&gt;</code>, seulement un <code>T: Observable</code> non optionnel), le geste le plus sûr est d'extraire une sous-vue qui reçoit le ViewModel déjà déballé, en propriété stockée plutôt qu'en variable locale de <code>body</code> :</p>
+  <pre><code>// NOUVEAU — Views/Discovery/PlaylistDetail/SongOptionSheet/SongOptionsForm.swift
+struct SongOptionsForm: View {
+    @Bindable var viewModel: SongOptionsViewModel
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ForEach(KaraokeMode.allCases) { option in
+                ModeCard(option: option, isSelected: viewModel.mode == option) {
+                    viewModel.mode = option
+                }
+            }
+        }
+
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Chanté par").font(.headline)
+            TextField("Chanteur", text: $viewModel.singerName)
+                .textFieldStyle(.roundedBorder)
+        }
+
+        Toggle("Régler les volumes", isOn: $viewModel.adjustVolumes)
+
+        VStack(alignment: .leading) {
+            HStack {
+                Text("Tonalité")
+                Spacer()
+                Text("\(Int(viewModel.pitch))")
+            }
+            Slider(value: $viewModel.pitch, in: -12...12, step: 1)
+        }
+
+        VStack(alignment: .leading) {
+            HStack {
+                Text("Tempo")
+                Spacer()
+                Text("\(Int(viewModel.tempo))")
+            }
+            Slider(value: $viewModel.tempo, in: -50...50, step: 5)
+        }
+    }
+}</code></pre>
+  <p><code>mode</code> n'a besoin d'aucun <code>Binding</code> — <code>ModeCard</code> prend un booléen et une closure, pas une projection <code>$</code> ; l'assignation directe (<code>viewModel.mode = option</code>) suffit, exactement comme avant avec le <code>@State</code>. <code>@Bindable</code> en propriété stockée d'une struct <code>View</code> — plutôt qu'en variable locale de <code>body</code> — est son usage le plus courant et le mieux documenté : aucune ambiguïté de placement, puisqu'il n'y a pas de "première ligne de body" à respecter pour une propriété de la struct elle-même.</p>
+
+  <details class="aside">
+    <summary>Pourquoi ne pas simplement essayer <code>@Bindable var viewModel = viewModel</code> dans un <code>if let</code> ?</summary>
+    <p>Ça aurait été la solution la plus proche de celle déjà enseignée en Leçon 10 — mais deux raisons l'écartent. D'abord, <code>SongOptionsSheet.viewModel</code> est <code>Optional</code> (<code>SongOptionsViewModel?</code>) tant que le <code>.task</code> n'a pas fini de s'exécuter ; <code>@Bindable</code> exige un type conforme directement à <code>Observable</code>, et <code>Optional&lt;T&gt;</code> ne l'est jamais, même quand <code>T</code> l'est — le compilateur refuse <code>@Bindable</code> sur une valeur optionnelle, avec une erreur explicite ("The wrapped value must be an object that conforms to Observable"). Ensuite, même après un <code>if let viewModel</code> pour obtenir une constante non optionnelle, une déclaration locale à property wrapper nichée dans un <code>VStack</code>/<code>ScrollView</code> reste plus fragile à documenter avec certitude que la même déclaration en propriété stockée d'une sous-vue — la contrainte "première ligne de <code>body</code>" observée en Leçon 10 n'a jamais été confirmée comme une règle Swift générale, seulement comme un comportement empirique avec <code>@Injected</code>. Extraire <code>SongOptionsForm</code> avec <code>@Bindable</code> en propriété stockée évite complètement ces deux questions plutôt que de parier sur l'une ou l'autre.</p>
+  </details>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build du projet (⌘B) : doit réussir sans erreur.</li>
+      <li>Ouvre la feuille d'options d'une chanson : mode, chanteur, volumes, tonalité, tempo se comportent exactement comme avant.</li>
+      <li>Appuie sur "Jouer maintenant" : le lecteur s'ouvre avec la bonne chanson, exactement comme avant.</li>
+      <li>Lance un téléchargement puis ferme la feuille avant la fin : vérifie que l'annulation du téléchargement se déclenche toujours (comportement de la Leçon 26/27, inchangé).</li>
+      <li>Dans Xcode, vérifie que <code>DiscoveryView.swift</code> n'a pas changé — aucun <code>DiscoveryViewModel</code> n'a été créé.</li>
+      <li>Vérifie que <code>SongOptionsSheet</code> ne contient plus aucun <code>@State</code> métier (seulement <code>viewModel</code>) et n'appelle plus <code>@Injected(\.player)</code> directement.</li>
+      <li>Vérifie que <code>SongOptionsForm</code> n'est <strong>pas</strong> déclaré <code>private</code> — utilisé depuis <code>SongOptionsSheet.swift</code>, un fichier différent, un <code>private</code> au niveau fichier l'aurait rendu invisible et aurait empêché la compilation.</li>
+      <li>Vérifie si <code>SongOptionsViewModel.downloadViewModel</code> a été rendu non optionnel (<code>let downloadViewModel: SongDownloadViewModel</code>, sans valeur par défaut) — sinon, c'est le correctif qui reste à appliquer, voir la section dédiée ci-dessus.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>5 <code>@State</code> métier + <code>@Injected(\.player)</code> dans <code>SongOptionsSheet</code></td><td>Tout regroupé dans <code>SongOptionsViewModel</code>, la View ne garde que <code>viewModel</code></td></tr>
+    <tr><td><code>player.currentSong = song</code> muté directement dans l'action du bouton</td><td><code>viewModel.playNow()</code>, testable indépendamment de toute View</td></tr>
+    <tr><td><code>downloadViewModel</code> récupéré séparément via un second appel implicite à <code>Container.shared</code></td><td>Composé dans <code>songOptionsViewModel</code>, un seul appel à <code>Container.shared</code> dans <code>.task</code></td></tr>
+    <tr><td><code>DiscoveryView</code> signalé "sans VM" par l'audit</td><td>Laissé tel quel, en connaissance de cause — rien à en extraire aujourd'hui</td></tr>
+    <tr><td>Aucun <code>@Bindable</code> nécessaire (tout était <code>@State</code>)</td><td><code>SongOptionsForm</code>, sous-vue dédiée avec <code>@Bindable var viewModel</code> en propriété stockée</td></tr>
+    <tr><td><code>downloadViewModel: SongDownloadViewModel?</code> optionnel, jamais nil en production</td><td><code>let downloadViewModel: SongDownloadViewModel</code> recommandé, sans valeur par défaut de confort de test</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source</div>
+    <code>audits/2026-07-28-clean-architecture-audit.md</code> — section 3.3 ("Views manquant un ViewModel").<br>
+    <a href="0022-reseau-urlsession-lyrics-ovh.html">Leçon 22</a> — le même geste appliqué la première fois, à <code>FullScreenPlayerView</code>.<br>
+    <a href="0010-composition-root.html">Leçon 10</a> — <code>@Bindable var x = x</code>, le précédent que cette leçon nuance et complète.<br>
+    <a href="https://forums.swift.org/t/compile-issue-with-optional-observable-object/71736">Swift Forums — "Compile issue with optional @Observable object"</a> — confirme que <code>@Bindable</code> refuse un type <code>Optional</code>, même quand le type enveloppé conforme à <code>Observable</code>.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi cette leçon ne crée-t-elle pas de <code>DiscoveryViewModel</code>, contrairement à ce que suggère l'audit ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce que DiscoveryView ne peut techniquement pas recevoir d'objet Observable</label>
+    <label><input type="radio" name="q1" value="b"> Parce que PlaylistSection interdit déjà tout ViewModel parent</label>
+    <label><input type="radio" name="q1" value="c"> Parce qu'il n'y a aujourd'hui aucun état ni logique à en extraire, juste une constante affichée</label>
+    <label><input type="radio" name="q1" value="d"> Parce que mockPlaylist a été supprimé par une leçon précédente</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Pourquoi la mutation de <code>PlayerState</code> ("Jouer maintenant") migre-t-elle vers le ViewModel plutôt que de rester dans la View ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce que @Injected ne peut techniquement pas être utilisé dans le corps d'une action de bouton</label>
+    <label><input type="radio" name="q2" value="b"> Parce que c'est une logique métier, testable indépendamment de toute View, contrairement à dismiss()</label>
+    <label><input type="radio" name="q2" value="c"> Parce que PlayerState doit obligatoirement être injecté via un constructeur</label>
+    <label><input type="radio" name="q2" value="d"> Parce que Button n'accepte pas de closure contenant plus d'une instruction</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi <code>dismiss()</code> reste-t-il dans la View plutôt que de migrer aussi vers le ViewModel ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que SongOptionsViewModel n'est techniquement pas annoté @MainActor</label>
+    <label><input type="radio" name="q3" value="b"> Parce que dismiss() ne peut être appelé que depuis un bouton, jamais depuis une méthode</label>
+    <label><input type="radio" name="q3" value="c"> Parce que PlayerState empêcherait toute autre mutation dans le même scope</label>
+    <label><input type="radio" name="q3" value="d"> Parce que @Environment(\.dismiss) est un mécanisme de navigation propre à SwiftUI, sans équivalent côté ViewModel</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. Pourquoi <code>songOptionsViewModel</code> compose-t-il <code>self.songDownloadViewModel(song)</code> à l'intérieur de sa propre Factory ?</p>
+    <label><input type="radio" name="q4" value="a"> Pour que SongOptionsSheet n'ait besoin que d'un seul appel à Container.shared, pas deux</label>
+    <label><input type="radio" name="q4" value="b"> Parce que ParameterFactory interdit techniquement d'être appelée deux fois dans une même View</label>
+    <label><input type="radio" name="q4" value="c"> Pour transformer SongDownloadViewModel en singleton partagé entre toutes les chansons</label>
+    <label><input type="radio" name="q4" value="d"> Parce que downloadViewModel doit obligatoirement précéder songOptionsViewModel dans le fichier</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">5. Pourquoi <code>@Bindable</code> ne peut-il pas s'appliquer directement à <code>SongOptionsSheet.viewModel</code> (<code>SongOptionsViewModel?</code>) ?</p>
+    <label><input type="radio" name="q5" value="a"> Parce que SongOptionsViewModel n'est techniquement pas annoté @Observable</label>
+    <label><input type="radio" name="q5" value="b"> Parce qu'un ViewModel contenant un autre ViewModel ne peut jamais être Bindable</label>
+    <label><input type="radio" name="q5" value="c"> Parce qu'Optional&lt;T&gt; ne conforme jamais à Observable, même quand T le fait</label>
+    <label><input type="radio" name="q5" value="d"> Parce que @Bindable est réservé aux propriétés stockées de classes, jamais de structs</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">6. Pourquoi extraire <code>SongOptionsForm</code> plutôt que de tenter <code>@Bindable var viewModel = viewModel</code> dans un <code>if let</code>, comme en Leçon 10 ?</p>
+    <label><input type="radio" name="q6" value="a"> Parce qu'un if let ne peut techniquement pas contenir de TextField ou de Slider</label>
+    <label><input type="radio" name="q6" value="b"> Parce que ça évite à la fois le refus d'@Bindable sur un Optional et l'incertitude sur le placement en local</label>
+    <label><input type="radio" name="q6" value="c"> Parce que ModeCard exige obligatoirement une sous-vue séparée pour fonctionner</label>
+    <label><input type="radio" name="q6" value="d"> Parce que SongOptionsForm est requis par le protocole View lui-même</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">7. Pourquoi <code>SongOptionsForm</code> ne peut-il pas être déclaré <code>private</code> dans son propre fichier ?</p>
+    <label><input type="radio" name="q7" value="a"> Parce qu'une View ne peut techniquement jamais être private en SwiftUI</label>
+    <label><input type="radio" name="q7" value="b"> Parce que @Bindable interdit toute déclaration private sur son type porteur</label>
+    <label><input type="radio" name="q7" value="c"> Parce que KaraokeMode.allCases ne serait plus visible depuis un type private</label>
+    <label><input type="radio" name="q7" value="d"> Parce que private, sur une déclaration de niveau fichier, restreint l'accès au fichier qui la déclare — or SongOptionsSheet est dans un autre fichier</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">8. Pourquoi <code>downloadViewModel: SongDownloadViewModel?</code> avec une valeur par défaut <code>nil</code> est-il déconseillé sur <code>SongOptionsViewModel</code> ?</p>
+    <label><input type="radio" name="q8" value="a"> Parce qu'un Optional ne peut techniquement pas être une propriété d'un type @Observable</label>
+    <label><input type="radio" name="q8" value="b"> Parce que la seule Factory de production ne fournit jamais nil, rendant l'optionnalité purement une commodité de test</label>
+    <label><input type="radio" name="q8" value="c"> Parce que SongDownloadViewModel lui-même ne peut techniquement pas être optionnel</label>
+    <label><input type="radio" name="q8" value="d"> Parce que cancelDownload() ne fonctionne que sur une référence non optionnelle</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le champ "Chanteur" ne se met plus à jour visuellement après le refactor ? Vérifie que <code>SongOptionsForm</code> utilise bien <code>$viewModel.singerName</code> (avec le <code>$</code>) et pas juste <code>viewModel.singerName</code> dans le <code>TextField</code> — l'un est un <code>Binding</code>, l'autre une simple lecture. Pose la question si la distinction entre les deux reste floue.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0028-mapper-srp-renommages-mocks-honnetes.html">← Leçon 28 : Repository range, Mapper transforme</a></span>
+    <span>Leçon suivante : tester les bugs corrigés en Leçon 26 (Swift Testing)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
