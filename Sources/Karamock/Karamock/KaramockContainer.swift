@@ -19,12 +19,12 @@ extension Container {
     }
     
     var downloadedSongsRepository: Factory<DownloadedSongsRepository> {
-        self { SimpleDownloadedSongsRepository() }
+        self { InMemoryDownloadedSongsRepository() }
             .singleton
     }
     
     var songDownloading: Factory<SongDownloading> {
-        self { MockSongDownloading() }
+        self { SimulatedSongDownloading() }
     }
 
     // Domain

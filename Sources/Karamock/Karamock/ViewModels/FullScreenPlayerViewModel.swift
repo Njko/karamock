@@ -10,7 +10,7 @@ import Foundation
 @MainActor
 @Observable
 final class FullScreenPlayerViewModel {
-    private(set) var lyrics: [LyricsLine] = mockLyrics
+    private(set) var lyrics: [LyricsLine] = placeholderLyrics
     
     private let song: Song
     private let fetchLyrics: FetchLyricsUseCase

@@ -13,7 +13,7 @@ struct LyricsLine : Identifiable, Hashable {
     let text : String
 }
 
-let mockLyrics: [LyricsLine] = [
+let placeholderLyrics: [LyricsLine] = [
     LyricsLine(time: 0, text: "Première ligne des paroles simulées"),
     LyricsLine(time: 4, text: "Chaque ligne a son propre horodatage"),
     LyricsLine(time: 8, text: "Le refrain arrive dans quelques secondes"),

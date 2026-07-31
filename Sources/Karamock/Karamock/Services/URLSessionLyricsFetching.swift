@@ -10,9 +10,9 @@ import os
 
 private let lyricsFetcherLogger = Logger(subsystem: "fr.nicolaslinard.karamock", category: "Lyrics")
 
-struct URLSessionLyricsFetching: LyricsFetching {
+nonisolated struct URLSessionLyricsFetching: LyricsFetching {
     func fetchLyrics(artist: String, title: String) async throws(LyricsError) -> String {
-        guard let url = await lyricsURL(artist: artist, title: title) else {
+        guard let url = lyricsURL(artist: artist, title: title) else {
             throw .invalidURL
         }
         
@@ -46,16 +46,17 @@ struct URLSessionLyricsFetching: LyricsFetching {
             throw .malformedResponse
         }
     }
-}
-
-private func lyricsURL(artist: String, title: String) -> URL? {
-    guard let encodedArtist = artist.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-          let encodedTitle = title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
-    else {
-        return nil
-    }
     
-    return URL(string: "https://api.lyrics.ovh/v1/\(encodedArtist)/\(encodedTitle)" )
+    
+    private func lyricsURL(artist: String, title: String) -> URL? {
+        guard let encodedArtist = artist.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let encodedTitle = title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+        else {
+            return nil
+        }
+        
+        return URL(string: "https://api.lyrics.ovh/v1/\(encodedArtist)/\(encodedTitle)" )
+    }
 }
 
 nonisolated private struct LyricsResponse: Decodable {

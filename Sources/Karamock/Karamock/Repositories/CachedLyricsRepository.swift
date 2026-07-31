@@ -21,15 +21,8 @@ actor CachedLyricsRepository: LyricsRepository {
         }
         
         let rawText = try await service.fetchLyrics(artist: song.artist, title: song.title)
-        let lines = rawText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         
-        guard !lines.isEmpty else { return [] }
-        
-        let interval = song.durationInSeconds/Double(lines.count)
-        
-        let result = lines.enumerated().map { index, text in
-            LyricsLine(time: Double(index) * interval, text: text)
-        }
+        let result = LyricsMapper.map(rawText: rawText, duration: song.durationInSeconds)
         
         await cache[song.id] = result
         return result

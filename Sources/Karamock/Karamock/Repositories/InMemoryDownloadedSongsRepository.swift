@@ -7,7 +7,7 @@
 
 import Foundation
  
-actor SimpleDownloadedSongsRepository: DownloadedSongsRepository {
+actor InMemoryDownloadedSongsRepository: DownloadedSongsRepository {
      private var storage: [Song] = []
     
     func songs() async -> [Song] {

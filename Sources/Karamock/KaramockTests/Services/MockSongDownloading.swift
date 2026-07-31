@@ -1,15 +1,17 @@
 //
-//  SongDownloading.swift
+//  MockSongDownloading.swift
 //  Karamock
 //
-//  Created by A422GQ on 23/07/2026.
+//  Created by A422GQ on 31/07/2026.
 //
+
+@testable import Karamock
 
 struct MockSongDownloading: SongDownloading {
     
     var shouldFail = false
     
-    func download(_ song: Song) -> AsyncThrowingStream<Double, Error> {
+    func download(_ song: Karamock.Song) -> AsyncThrowingStream<Double, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
