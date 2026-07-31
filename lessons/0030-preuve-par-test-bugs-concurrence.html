@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 30 — Preuve par test : les bugs de la Leçon 26 ne reviendront pas</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 30 · Nettoyage architecture (7/N)</p>
+  <h1>Preuve par test : les bugs de concurrence de la Leçon 26 ne reviendront pas</h1>
+  <p class="subtitle">La Leçon 13 a posé Swift Testing et Factory comme outil de vérification. La Leçon 26 a corrigé trois bugs silencieux — une Task orpheline, un identifiant instable — que le compilateur Swift 6 ne pouvait pas voir. Cette leçon relie les deux : trois tests, chacun écrit pour qu'un futur refactor malheureux le fasse échouer immédiatement, plutôt que de laisser le bug revenir sans bruit.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> "j'ai corrigé ce bug" est une phrase faible en entretien Tech Lead. "J'ai corrigé ce bug, et voici le test qui échoue si quelqu'un le réintroduit" en est une autre. Cette leçon referme le cycle Nettoyage architecture (Leçons 24 à 30) sur exactement cette distinction.
+  </div>
+
+  <h2>Test 1 — l'identité de <code>Song</code> reste stable</h2>
+  <p>Bug #3 de la Leçon 26 : <code>Song.id</code> est passé d'un <code>UUID()</code> tiré au sort à chaque construction à une valeur calculée à partir de <code>artist</code>/<code>title</code>. Le test le plus direct : construire deux fois la <em>même</em> chanson, séparément, et vérifier que leurs identifiants concordent.</p>
+  <pre><code>// KaramockTests/Domain/SongIdentityTests.swift
+import Testing
+@testable import Karamock
+
+struct SongIdentityTests {
+
+    @Test
+    @MainActor
+    func songsWithSameArtistAndTitleShareTheSameIdentity() {
+        let first = Song(title: "Kashmir", artist: "Led Zeppelin", year: 1975, duration: "8:37", key: "Dm")
+        let second = Song(title: "Kashmir", artist: "Led Zeppelin", year: 1975, duration: "8:37", key: "Dm")
+
+        #expect(first.id == second.id)
+        #expect(first == second)
+    }
+}</code></pre>
+  <p>Aucun <code>@Suite(.container)</code>, aucun import Factory ici : ce test ne touche à aucune dépendance, <code>Song</code> est une <code>struct</code> construite directement — rien à substituer dans le <code>Container</code>. Ce qui surprend davantage : ce test, purement synchrone et sans aucun appel réseau ou base de données, a quand même besoin de <code>@MainActor</code>. La raison est exactement celle documentée en Leçon 26 : <code>id</code> est une propriété <strong>calculée</strong>, et <code>Song</code> n'est pas marqué <code>nonisolated</code> — <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0434-global-actor-isolated-types-usability.md">SE-0434</a> exempte les propriétés <em>stockées</em> <code>Sendable</code> de l'isolation par défaut, jamais les propriétés calculées. <code>first.id</code> retombe donc sous la règle générale de <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0466-control-default-actor-isolation.md">SE-0466</a> et reste implicitement isolé au Main Actor — un test qui le lit doit donc l'être aussi, sous peine d'erreur de compilation Swift 6. Nicolas n'a pour l'instant pas appliqué la correction <code>nonisolated var id</code> suggérée en Leçon 26 ; ce test compile quand même, simplement parce qu'il est <code>@MainActor</code> — la marque <code>nonisolated</code> resterait un geste de cohérence, pas une obligation.</p>
+
+  <details class="aside">
+    <summary>Pourquoi <code>first == second</code> est vrai, indépendamment du fix de <code>id</code></summary>
+    <p>Une question naturelle : la deuxième assertion (<code>first == second</code>) teste-t-elle vraiment la correction de la Leçon 26 ? Vérification faite auprès de <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0185-synthesize-equatable-hashable.md">SE-0185</a> (Synthesizing <code>Equatable</code> and <code>Hashable</code> conformance) : <em>"synthesis of <code>Equatable</code>'s requirements is based on the conformances of only its stored instance properties. Neither static properties nor computed instance properties... are considered."</em> Le <code>Hashable</code>/<code>Equatable</code> synthétisé de <code>Song</code> ignore donc totalement <code>id</code> depuis qu'il est devenu calculé — il compare uniquement <code>title</code>, <code>artist</code>, <code>year</code>, <code>duration</code>, <code>key</code>, tous stockés. C'est en réalité une conséquence <em>indirecte</em>, plus profonde que l'intention affichée du fix de la Leçon 26 : avant le fix (<code>let id = UUID()</code>, stocké), <code>id</code> faisait partie de la comparaison synthétisée, et c'est exactement pour ça que deux <code>Song</code> identiques par ailleurs n'étaient jamais égaux — le piège déjà documenté en Leçon 13. Après le fix, <code>id</code> n'entre même plus en jeu dans <code>==</code> : ce n'est plus une histoire d'identifiants qui concordent, mais d'identifiants complètement mis de côté par le compilateur. La première assertion (<code>first.id == second.id</code>) reste la plus importante pour ce bug précis : c'est <code>id</code>, pas <code>==</code>, qu'utilisent réellement <code>storage.contains(song)</code> et <code>cache[song.id]</code>.</p>
+  </details>
+
+  <h2>Test 2 — annuler un téléchargement ne doit jamais persister la chanson</h2>
+  <p>Bugs #1 et #2 de la Leçon 26, ensemble : la Task orpheline de <code>DownloadSongUseCase</code> et la Task non trackée de <code>SongDownloadViewModel</code>. Le test doit prouver qu'appeler <code>cancelDownload()</code> en cours de route empêche <code>repository.add(song)</code> de jamais s'exécuter.</p>
+  <pre><code>// KaramockTests/ViewModels/SongDownloadCancellationTests.swift
+import Testing
+import FactoryKit
+import FactoryTesting
+@testable import Karamock
+
+@Suite(.container)
+struct SongDownloadCancellationTests {
+
+    @Test
+    @MainActor
+    func cancellingMidDownloadNeverPersistsTheSong() async throws {
+        let song = Song(title: "Kashmir", artist: "Led Zeppelin", year: 1975, duration: "8:37", key: "Dm")
+        let repository = MockDownloadedSongsRepository()
+        Container.shared.downloadedSongsRepository { repository }
+        Container.shared.songDownloading { MockSongDownloading() }
+
+        let viewModel = Container.shared.songDownloadViewModel(song)
+        viewModel.startDownload()
+
+        try await Task.sleep(for: .milliseconds(250))   // laisse partir une ou deux valeurs de progression
+        viewModel.cancelDownload()
+
+        // Attente volontairement bornée, plus longue que les 10 x 200 ms du mock :
+        // si le bug de la Task orpheline revenait, l'ajout aurait déjà eu lieu.
+        try await Task.sleep(for: .milliseconds(2500))
+
+        #expect(await repository.songs().isEmpty)
+    }
+}</code></pre>
+  <p>Le test suit la même construction qu'en production (<code>Container.shared.songDownloadViewModel(song)</code>, comme en Leçon 13) plutôt que d'assembler <code>SongDownloadViewModel</code> à la main — <code>downloadSong</code> compose automatiquement <code>songDownloading</code> et <code>downloadedSongsRepository</code>, exactement la même chaîne d'appels qu'à l'exécution réelle.</p>
+
+  <details class="aside">
+    <summary>Pourquoi ne pas utiliser <code>confirmation()</code> pour éviter l'attente bornée ?</summary>
+    <p>Swift Testing propose <code>confirmation(_:expectedCount:)</code>, avec <code>expectedCount: 0</code> documenté explicitement pour "cet événement ne doit jamais se produire". Ça semblait la solution évidente pour remplacer un <code>Task.sleep</code> arbitraire — vérification faite, ce n'est pas le cas ici. <code>confirmation</code> vérifie le nombre d'appels reçus <strong>pendant l'exécution de sa closure</strong>, il n'attend rien de plus : si <code>repository.add</code> est censé être appelé (ou pas) par une Task détachée qui continue de tourner après la fin de cette closure, <code>confirmation</code> conclut prématurément. C'est précisément le scénario décrit dans <a href="https://github.com/swiftlang/swift-testing/issues/978">l'issue #978 du dépôt swift-testing</a> — fermée "not planned" par l'équipe Swift Testing, qui confirme qu'aucun mécanisme d'attente n'existe aujourd'hui pour ce cas précis. En clair : tant que <code>DownloadSongUseCase</code> et <code>SongDownloadViewModel</code> ne remontent aucun signal testable de "la Task interne a terminé son nettoyage", une attente bornée explicite reste la façon la plus honnête d'écrire ce test — pas une négligence, une limite documentée de l'écosystème actuel.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Précision sur <code>onTermination</code> : ce n'est pas la sortie de boucle qui déclenche tout</summary>
+    <p>Un raccourci tentant serait de penser que sortir d'un <code>for await</code> par <code>break</code> ou <code>return</code>, où que ce soit dans la chaîne, déclenche <code>onTermination</code>. Ce n'est pas ce que documente <a href="https://github.com/swiftlang/swift/blob/main/stdlib/public/Concurrency/AsyncThrowingStream.swift">le code source de <code>AsyncThrowingStream</code></a> : <em>"If an <code>onTermination</code> callback is set, using task cancellation to terminate iteration of an AsyncThrowingStream results in a call to this callback."</em> Le déclencheur documenté est précisément l'annulation de la <strong>Task consommatrice</strong>, pas la sortie de la boucle en elle-même. Dans la chaîne de la Leçon 26 : <code>cancelDownload()</code> annule <code>downloadTask</code> (la Task du ViewModel, consommatrice du stream de <code>DownloadSongUseCase</code>) → cette annulation déclenche <code>onTermination</code> sur <em>ce</em> stream → qui annule à son tour la Task interne de <code>DownloadSongUseCase</code>. Le <code>guard !Task.isCancelled else { break }</code> à l'intérieur de cette Task interne est une réaction à une annulation déjà propagée, pas ce qui la déclenche.</p>
+  </details>
+
+  <h2>Test 3 — un téléchargement en échec bascule bien vers <code>.failed</code></h2>
+  <p>Promesse de la Leçon 28 : depuis que <code>MockSongDownloading(shouldFail: true)</code> a migré dans la cible de tests, il n'est plus possible de simuler un échec via un <code>#Preview</code> — la seule façon correcte de le vérifier devient un vrai test.</p>
+  <pre><code>// KaramockTests/ViewModels/SongDownloadFailureTests.swift
+import Testing
+import FactoryKit
+import FactoryTesting
+@testable import Karamock
+
+@Suite(.container)
+struct SongDownloadFailureTests {
+
+    @Test
+    @MainActor
+    func failedDownloadTransitionsToFailedState() async throws {
+        let song = Song(title: "Kashmir", artist: "Led Zeppelin", year: 1975, duration: "8:37", key: "Dm")
+        Container.shared.downloadedSongsRepository { MockDownloadedSongsRepository() }
+        Container.shared.songDownloading { MockSongDownloading(shouldFail: true) }
+
+        let viewModel = Container.shared.songDownloadViewModel(song)
+        viewModel.startDownload()
+
+        // MockSongDownloading(shouldFail: true) échoue à l'étape 5, soit 5 x 200 ms.
+        try await Task.sleep(for: .milliseconds(1250))
+
+        #expect(viewModel.state == .failed)
+    }
+}</code></pre>
+  <p>Ce test aussi repose sur une attente bornée — mais d'une nature différente du Test 2 : ici on attend qu'un événement <em>positif</em> se produise (l'échec, à un instant connu et fixe du mock), pas qu'un événement négatif continue de ne pas se produire indéfiniment. La marge de 250 ms au-dessus des 1000 ms nécessaires suffit largement, sans avoir besoin de couvrir toute la durée du stream comme au Test 2.</p>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build de la cible <code>KaramockTests</code> (⌘U) : les trois nouveaux tests doivent apparaître dans le Test Navigator.</li>
+      <li><code>songsWithSameArtistAndTitleShareTheSameIdentity</code> passe sans délai perceptible — aucune concurrence en jeu.</li>
+      <li><code>cancellingMidDownloadNeverPersistsTheSong</code> prend environ 2,75 secondes à s'exécuter — normal, c'est l'attente bornée assumée.</li>
+      <li><code>failedDownloadTransitionsToFailedState</code> prend environ 1,25 seconde.</li>
+      <li>Commente temporairement le <code>guard !Task.isCancelled else { return }</code> après la boucle dans <code>SongDownloadViewModel.startDownload()</code> (réintroduis sciemment le Bug #2) : <code>cancellingMidDownloadNeverPersistsTheSong</code> doit désormais échouer.</li>
+      <li>Reviens en arrière (annule ce changement) : les trois tests repassent au vert.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Sans ces tests</th><th>Avec ces tests</th></tr>
+    <tr><td>"Le bug est corrigé" repose sur une relecture manuelle du diff</td><td>Un futur retour du bug fait échouer un test précis, immédiatement</td></tr>
+    <tr><td>Vérifier <code>.failed</code> nécessitait un contournement manuel via <code>#Preview</code> (Leçon 27), devenu impossible depuis la Leçon 28</td><td><code>MockSongDownloading(shouldFail: true)</code> utilisé là où il a toujours dû l'être : dans un test</td></tr>
+    <tr><td>Aucune preuve que l'identité de <code>Song</code> reste stable entre deux constructions séparées</td><td><code>songsWithSameArtistAndTitleShareTheSameIdentity</code> le garantit, sans délai</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source</div>
+    <a href="0013-tests-swift-testing.html">Leçon 13</a> et <a href="0026-bugs-concurrence-task-orpheline-identite.html">Leçon 26</a> — les deux leçons que celle-ci relie.<br>
+    <a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0185-synthesize-equatable-hashable.md">SE-0185</a> — confirme que <code>Equatable</code>/<code>Hashable</code> synthétisés ignorent les propriétés calculées.<br>
+    <a href="https://github.com/swiftlang/swift-testing/issues/978">swift-testing issue #978</a> — confirme que <code>confirmation()</code> n'attend pas les événements asynchrones survenant après la fin de sa closure ; fermée "not planned".<br>
+    <a href="https://github.com/swiftlang/swift/blob/main/stdlib/public/Concurrency/AsyncThrowingStream.swift">AsyncThrowingStream.swift</a> (sources Swift) — précise que <code>onTermination</code> se déclenche sur l'annulation de la Task consommatrice, pas sur la simple sortie d'une boucle.<br>
+    <code>lessons/0028-mapper-srp-renommages-mocks-honnetes.html</code> — la promesse "exactement le sujet de la Leçon 30" tenue ici par le Test 3.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi <code>songsWithSameArtistAndTitleShareTheSameIdentity</code> a-t-il besoin de <code>@MainActor</code>, alors qu'il ne fait rien d'asynchrone ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce que tout @Test doit obligatoirement être annoté @MainActor depuis Swift Testing 2.0</label>
+    <label><input type="radio" name="q1" value="b"> Parce que Song conforme à Sendable uniquement depuis le Main Actor</label>
+    <label><input type="radio" name="q1" value="c"> Parce que id, propriété calculée non exemptée par SE-0434, reste implicitement isolé au Main Actor</label>
+    <label><input type="radio" name="q1" value="d"> Parce que #expect ne fonctionne que dans un contexte isolé au Main Actor</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. D'après SE-0185, pourquoi <code>first == second</code> est-il vrai même sans regarder <code>id</code> ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce que Song a explicitement une conformance Equatable écrite à la main</label>
+    <label><input type="radio" name="q2" value="b"> Parce que Equatable/Hashable synthétisés ne comparent jamais les propriétés calculées</label>
+    <label><input type="radio" name="q2" value="c"> Parce que title et artist suffisent techniquement à identifier Song depuis Identifiable</label>
+    <label><input type="radio" name="q2" value="d"> Parce que le compilateur mémorise le premier Song construit comme référence</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi <code>confirmation(expectedCount: 0)</code> ne suffit-il pas à remplacer l'attente bornée du Test 2 ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que expectedCount: 0 est une valeur techniquement invalide en Swift Testing</label>
+    <label><input type="radio" name="q3" value="b"> Parce que confirmation ne peut pas être utilisé à l'intérieur d'un @Suite(.container)</label>
+    <label><input type="radio" name="q3" value="c"> Parce que repository.add n'est techniquement pas observable par une closure</label>
+    <label><input type="radio" name="q3" value="d"> Parce que confirmation ne vérifie que les appels reçus pendant sa propre closure, sans attendre les événements ultérieurs</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. D'après le code source d'AsyncThrowingStream, qu'est-ce qui déclenche précisément <code>onTermination</code> ?</p>
+    <label><input type="radio" name="q4" value="a"> L'annulation de la Task consommatrice qui itère le stream, pas la simple sortie d'une boucle</label>
+    <label><input type="radio" name="q4" value="b"> N'importe quel break ou return exécuté à l'intérieur d'un for await</label>
+    <label><input type="radio" name="q4" value="c"> Uniquement l'appel explicite à continuation.finish(), jamais une annulation</label>
+    <label><input type="radio" name="q4" value="d"> La désallocation du Container par FactoryTesting entre deux tests</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">5. Pourquoi l'attente de 2500 ms après <code>cancelDownload()</code> est-elle délibérément plus longue que la durée totale du mock (10 x 200 ms) ?</p>
+    <label><input type="radio" name="q5" value="a"> Pour laisser le temps à FactoryTesting de réinitialiser le Container entre les assertions</label>
+    <label><input type="radio" name="q5" value="b"> Parce que Task.sleep exige toujours une durée supérieure à 2 secondes en test</label>
+    <label><input type="radio" name="q5" value="c"> Pour garantir que si le bug de la Task orpheline revenait, l'ajout aurait déjà eu lieu au moment de l'assertion</label>
+    <label><input type="radio" name="q5" value="d"> Parce que MockDownloadedSongsRepository met 2500 ms à répondre à songs()</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">6. Pourquoi le Test 3 utilise-t-il <code>MockSongDownloading(shouldFail: true)</code> plutôt que <code>SimulatedSongDownloading</code>, la Factory de production ?</p>
+    <label><input type="radio" name="q6" value="a"> Parce que SimulatedSongDownloading a été supprimée par la Leçon 28</label>
+    <label><input type="radio" name="q6" value="b"> Parce que SimulatedSongDownloading ne lève jamais d'erreur, seul MockSongDownloading expose un échec contrôlable</label>
+    <label><input type="radio" name="q6" value="c"> Parce que Container.shared refuse d'enregistrer SimulatedSongDownloading dans un test</label>
+    <label><input type="radio" name="q6" value="d"> Parce que shouldFail est un requirement du protocole SongDownloading</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">7. Pourquoi les Tests 2 et 3 passent-ils par <code>Container.shared.songDownloadViewModel(song)</code> plutôt que de construire <code>SongDownloadViewModel</code> à la main ?</p>
+    <label><input type="radio" name="q7" value="a"> Parce que SongDownloadViewModel n'a techniquement plus d'initialiseur public depuis la Leçon 27</label>
+    <label><input type="radio" name="q7" value="b"> Parce que ParameterFactory interdit toute construction manuelle du type qu'elle produit</label>
+    <label><input type="radio" name="q7" value="c"> Parce que downloadSong ne peut être résolu que depuis une Factory, jamais directement</label>
+    <label><input type="radio" name="q7" value="d"> Pour que le test suive la même chaîne d'assemblage qu'en production, comme établi en Leçon 13</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">8. Pourquoi <code>SongIdentityTests</code> n'a-t-il besoin ni de <code>@Suite(.container)</code> ni d'import FactoryKit, contrairement aux deux autres fichiers de tests ?</p>
+    <label><input type="radio" name="q8" value="a"> Parce qu'il ne touche à aucune dépendance injectée — Song se construit directement, sans Container</label>
+    <label><input type="radio" name="q8" value="b"> Parce que Song est un singleton partagé, déjà résolu une seule fois au lancement des tests</label>
+    <label><input type="radio" name="q8" value="c"> Parce que FactoryKit n'est techniquement pas compatible avec les structs Hashable</label>
+    <label><input type="radio" name="q8" value="d"> Parce que @Suite(.container) est réservé aux tests annotés @MainActor</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le test d'annulation reste vert même après avoir réintroduit le Bug #2 ? Vérifie que le délai de 250 ms avant <code>cancelDownload()</code> laisse bien le temps à au moins une valeur de progression de partir — sur une machine lente, augmente-le légèrement. Pose la question si un des trois tests reste instable (flaky) d'une exécution à l'autre.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0029-songoptionsviewmodel-etat-vue.html">← Leçon 29 : SongOptionsViewModel gagne son état</a></span>
+    <span>Le cycle Nettoyage architecture (Leçons 24 à 30) est bouclé — prochains objectifs à définir avec Nicolas</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
