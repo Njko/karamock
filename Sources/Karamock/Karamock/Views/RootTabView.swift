@@ -14,6 +14,24 @@ struct RootTabView: View {
     var body: some View {
         @Bindable var player = player
         
+        #if os(iOS)
+        tabs.fullScreenCover(isPresented: $player.isExpanded) {
+            if let song = player.currentSong {
+                FullScreenPlayerView(song: song)
+            }
+        }
+        #else
+        NavigationStack {
+            tabs.navigationDestination(isPresented: $player.isExpanded) {
+                if let song = player.currentSong {
+                    FullScreenPlayerView(song: song)
+                }
+            }
+        }
+        #endif
+    }
+    
+    private var tabs: some View {
         TabView {
             DiscoveryView()
                 .tabItem {
@@ -40,10 +58,6 @@ struct RootTabView: View {
             }
         }
         #endif
-        .fullScreenCover(isPresented: $player.isExpanded) {
-            if let song = player.currentSong {
-                FullScreenPlayerView(song: song)
-            }
-        }
+        
     }
 }
