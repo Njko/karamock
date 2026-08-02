@@ -8,9 +8,14 @@ import SwiftUI
 
 struct SongOptionsForm: View {
     @Bindable var viewModel: SongOptionsViewModel
+#if os(iOS)
+    private let spacing: CGFloat = 12
+#else
+    private let spacing: CGFloat = 24
+#endif
     
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: spacing) {
             ForEach(KaraokeMode.allCases) { option in
                 ModeCard(option: option, isSelected: viewModel.mode == option) {
                     viewModel.mode = option

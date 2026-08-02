@@ -37,6 +37,7 @@ struct MiniPlayerBarTV: View {
             .clipShape(RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.plain)
+        .onPlayPauseCommand { player.isPlaying.toggle() }
         .accessibilityLabel("\(song.title), \(song.artist), \(player.isPlaying ? "en lecture" : "en pause")")
         .accessibilityHint("Ouvrir le lecteur plein écran")
     }

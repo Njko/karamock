@@ -15,7 +15,11 @@ struct SongHeader: View {
         HStack(alignment: .top, spacing: 12) {
             RoundedRectangle(cornerRadius: 8)
                 .fill(.quaternary)
+            #if os(iOS)
                 .frame(width: 60, height: 60)
+            #else
+                .frame(width: 100, height: 100)
+            #endif
             VStack(alignment: .leading, spacing: 4) {
                 Text(song.title).font(.title3.bold())
                 Text(song.artist).foregroundStyle(.secondary)
@@ -25,7 +29,11 @@ struct SongHeader: View {
                     Label(song.key, systemImage: "wrench.fill")
                 }
             }
+        #if os(iOS)
             .font(.caption)
+        #else
+            .font(.callout)
+        #endif
             .foregroundStyle(.secondary)
         }
     }

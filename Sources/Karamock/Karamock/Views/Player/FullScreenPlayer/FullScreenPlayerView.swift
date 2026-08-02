@@ -50,9 +50,9 @@ struct FullScreenPlayerView: View {
                 )
                 #endif
                 HStack {
-                    Text("0:00")
+                    Text(formatTime(progress))
                     Spacer()
-                    Text("-" + song.duration)
+                    Text("-" + formatTime(song.durationInSeconds - progress))
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -81,6 +81,7 @@ struct FullScreenPlayerView: View {
             Spacer()
         }
         .padding()
+        .onPlayPauseCommand { player.isPlaying.toggle() }
         .onReceive(timer) { _ in
             guard player.isPlaying, progress < song.durationInSeconds else { return }
             progress += 0.5

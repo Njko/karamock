@@ -55,6 +55,7 @@ struct RootTabView: View {
                 MiniPlayerBarTV(song: song)
                     .padding(.horizontal, 60)
                     .padding(.bottom, 40)
+                    .focusSection()
             }
         }
         #endif

@@ -9,6 +9,7 @@ import SwiftUI
 
 extension View {
     func stretchy() -> some View {
+        #if os(iOS)
         visualEffect { effect, geometry in
             let currentHeight = geometry.size.height
             let scrollOffset = geometry.frame(in: .scrollView).minY
@@ -24,5 +25,8 @@ extension View {
             )
             
         }
+        #else
+        self
+        #endif
     }
 }

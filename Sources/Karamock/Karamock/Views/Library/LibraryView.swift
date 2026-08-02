@@ -38,9 +38,11 @@ struct LibraryView: View {
         .task {
             await viewModel.refresh()
         }
+        #if os(iOS)
         .refreshable {
             await viewModel.refresh()
         }
+        #endif
         .sheet(item: $selectedSong) { song in
             SongOptionsSheet(song: song)
         }

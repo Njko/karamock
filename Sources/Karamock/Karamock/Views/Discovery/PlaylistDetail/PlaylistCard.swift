@@ -13,7 +13,11 @@ struct PlaylistCard: View {
     
     var body: some View {
         LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+        #if os(iOS)
             .frame(width: 150, height: 150)
+        #else
+            .frame(width: 280, height: 280)
+        #endif
             .overlay(alignment: .bottomLeading) {
                 Text(playlist.title)
                     .font(.headline)
