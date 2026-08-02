@@ -23,6 +23,7 @@ Git est le pont entre les deux : chaque machine pousse ses propres fichiers (le 
 | `NOTES.md` | Journal vivant : décisions, conventions, feuille de route des prochaines leçons |
 | `RESOURCES.md` | Sources externes de confiance utilisées pour construire les leçons |
 | `learning-records/*.md` | Décisions d'architecture et enseignements durables (équivalent d'ADR) |
+| `audits/*.md` | Audits externes de l'architecture (ex. Clean Architecture, 2026-07-28) — lus pour ancrer les leçons, jamais rédigés ni modifiés depuis Windows |
 | `reference/screenshots/` | Captures de référence de la vraie app KaraFun |
 | `assets/` | `style.css`/`quiz.js` partagés par toutes les leçons |
 
@@ -44,7 +45,9 @@ Pour l'ouvrir : cloner ce dépôt sur un Mac avec Xcode 26+, ouvrir `Sources/Kar
 | Accessibilité (VoiceOver, Dynamic Type) | 14 – 17 |
 | Interface avancée (header extensible, mini-lecteur, TabView bottom accessory) | 18, 20 – 21 |
 | Concurrence Swift 6 | 19 |
-| Réseau (URLSession) | 22+ |
+| Réseau (URLSession, lyrics.ovh) | 22 |
+| Gestion des erreurs typées (typed throws, SE-0413) | 23 |
+| Nettoyage architecture post-audit | 24+ |
 
 Le détail complet, à jour, est dans [`NOTES.md`](NOTES.md).
 

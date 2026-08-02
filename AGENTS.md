@@ -39,6 +39,7 @@ If you spot an inconsistency, bug, or stale pattern in `Sources/`: **describe it
 - Quizzes: exactly-comparable-length answer options (don't let the correct answer be identifiable by being longer/more detailed), vary which option is correct across questions.
 - **Never guess API, library, or framework syntax.** Verify via web search/fetch against primary sources (official docs, evolution proposals, or by directly testing — e.g. `curl` for HTTP APIs) before writing any code example. Cite the primary source in a "Sources primaires recommandées" box.
 - **Ground every lesson in the real, current state of `Sources/`** — read the actual files before describing "before" code; don't rely on a previous lesson's description of what the code used to look like, since the human often changes it independently between lessons.
+- `audits/*.md` holds external architecture audits (e.g. `2026-07-28-clean-architecture-audit.md`, produced outside this session). Treat them as read-only input for grounding lesson content — never author or edit files there, same rule as `Sources/`.
 - Link each lesson's nav footer forward/backward to its neighbors once both exist.
 - Update `NOTES.md` after writing or revising a lesson — it's the living index of what's done, what's next, and why.
 

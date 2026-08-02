@@ -1,0 +1,9 @@
+# La mission s'élargit de nouveau : tvOS multi-plateforme, puis un moteur de paroles en C++
+
+Le cycle Nettoyage architecture (Leçons 24 à 30) bouclé, Nicolas a défini deux nouveaux axes majeurs pour la suite, dans cet ordre : (1) ajouter une target AppleTV au projet Xcode existant, pour pratiquer les mécaniques d'un projet iOS enrichi d'une nouvelle plateforme et les problèmes cross-plateforme que ça soulève ; (2) construire un mini moteur de paroles en C++ qui remplace la logique SwiftUI actuelle de gestion du karaoké, pour pratiquer la compatibilité d'un projet Xcode avec du code natif C++ (interop Swift/C++). `MISSION.md` mis à jour en conséquence ("Success looks like" et clarification "Out of scope").
+
+## Implications
+- Portage tvOS scopé volontairement à l'existant : ajouter la target, compiler, adapter les écrans actuels tels quels — pas une exploration approfondie du Focus Engine ou des idiomes télécommande pour l'instant (décision explicite de Nicolas, pas une omission).
+- Le moteur C++ garde le même modèle de timing simulé qu'aujourd'hui (répartition uniforme sur la durée) — objectif pédagogique explicitement l'interop Swift/C++, pas un vrai moteur audio karaoké. Reste cohérent avec l'exclusion "vrai moteur audio" déjà actée dans [[MISSION.md]] depuis le début de la mission.
+- Le backlog de polish UI/accessibilité mis de côté en Leçon 26 (barre de navigation transparente au scroll, contraste de couleurs, VoiceOver sur d'autres écrans que le lecteur, Reduce Motion, sections Quiz/Styles de Découvrir) est explicitement mis de côté **indéfiniment** par ce choix (pas "repris après ces deux axes") — ne pas le replanifier sans que Nicolas ne le redemande explicitement.
+- tvOS avant C++ : logique de séquencement — stabiliser d'abord le projet en multi-target avant d'y ajouter une deuxième complexité (interop C++) par-dessus.
