@@ -31,6 +31,14 @@ struct RootTabView: View {
                 MiniPlayerBar(song: song)
             }
         }
+        #else
+        .overlay(alignment: .bottom) {
+            if let song = player.currentSong, !player.isExpanded {
+                MiniPlayerBarTV(song: song)
+                    .padding(.horizontal, 60)
+                    .padding(.bottom, 40)
+            }
+        }
         #endif
         .fullScreenCover(isPresented: $player.isExpanded) {
             if let song = player.currentSong {

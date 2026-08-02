@@ -23,6 +23,8 @@ struct SongOptionsForm: View {
             TextField("Chanteur", text: $viewModel.singerName)
             #if os(iOS)
                 .textFieldStyle(.roundedBorder)
+            #else
+                .textFieldStyle(.automatic)
             #endif
         }
         
@@ -36,6 +38,13 @@ struct SongOptionsForm: View {
             }
             #if os(iOS)
             Slider(value: $viewModel.pitch, in: -12...12, step: 1)
+            #else
+            FocusStepperTV(
+                onDecrement: { viewModel.pitch = max(-12, viewModel.pitch - 1) },
+                onIncrement: { viewModel.pitch = min(12, viewModel.pitch + 1)},
+                decrementDisabled: viewModel.pitch <= -12,
+                incrementDisabled: viewModel.pitch >= 12
+            )
             #endif
         }
         
@@ -47,6 +56,13 @@ struct SongOptionsForm: View {
             }
             #if os(iOS)
             Slider(value: $viewModel.tempo, in: -50...50, step: 5)
+            #else
+            FocusStepperTV(
+                onDecrement: { viewModel.tempo = max(-50, viewModel.tempo - 1) },
+                onIncrement: { viewModel.tempo = min(50, viewModel.tempo + 1)},
+                decrementDisabled: viewModel.tempo <= -50,
+                incrementDisabled: viewModel.tempo >= 50
+            )
             #endif
         }
     }

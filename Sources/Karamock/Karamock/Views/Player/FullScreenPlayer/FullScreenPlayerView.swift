@@ -41,6 +41,13 @@ struct FullScreenPlayerView: View {
             VStack(spacing:8) {
                 #if os(iOS)
                 Slider(value: $progress, in: 0...song.durationInSeconds)
+                #else
+                FocusStepperTV(
+                    onDecrement: { progress = max(0, progress - 10) },
+                    onIncrement: { progress = min(song.durationInSeconds, progress + 10)},
+                    decrementDisabled: progress <= 0,
+                    incrementDisabled: progress >= song.durationInSeconds
+                )
                 #endif
                 HStack {
                     Text("0:00")

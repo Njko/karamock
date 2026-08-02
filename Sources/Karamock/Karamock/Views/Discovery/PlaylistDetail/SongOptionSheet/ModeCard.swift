@@ -25,6 +25,11 @@ struct ModeCard : View {
             .padding()
             #if os(iOS)
             .background(isSelected ? Color.purple.opacity(0.15) : Color(.secondarySystemBackground))
+            #else
+            .background(.regularMaterial)
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .stroke(.purple, lineWidth: isSelected ? 3 : 0)
+            )
             #endif
             .foregroundStyle(.primary)
             .clipShape(RoundedRectangle(cornerRadius: 12))
