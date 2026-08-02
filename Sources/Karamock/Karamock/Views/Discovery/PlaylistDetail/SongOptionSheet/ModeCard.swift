@@ -23,7 +23,9 @@ struct ModeCard : View {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
             }
             .padding()
+            #if os(iOS)
             .background(isSelected ? Color.purple.opacity(0.15) : Color(.secondarySystemBackground))
+            #endif
             .foregroundStyle(.primary)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }

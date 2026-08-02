@@ -21,8 +21,9 @@ struct SongOptionsForm: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Chanté par").font(.headline)
             TextField("Chanteur", text: $viewModel.singerName)
+            #if os(iOS)
                 .textFieldStyle(.roundedBorder)
-            
+            #endif
         }
         
         Toggle("Régler les volumes", isOn: $viewModel.adjustVolumes)
@@ -33,7 +34,9 @@ struct SongOptionsForm: View {
                 Spacer()
                 Text("\(Int(viewModel.pitch))")
             }
+            #if os(iOS)
             Slider(value: $viewModel.pitch, in: -12...12, step: 1)
+            #endif
         }
         
         VStack(alignment: .leading) {
@@ -42,7 +45,9 @@ struct SongOptionsForm: View {
                 Spacer()
                 Text("\(Int(viewModel.tempo))")
             }
+            #if os(iOS)
             Slider(value: $viewModel.tempo, in: -50...50, step: 5)
+            #endif
         }
     }
 }

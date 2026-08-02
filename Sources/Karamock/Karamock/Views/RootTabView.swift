@@ -24,12 +24,14 @@ struct RootTabView: View {
                     Label("Bibliothèque", systemImage: "music.note.list")
                 }
         }
+        #if os(iOS)
         .tabBarMinimizeBehavior(.onScrollDown)
         .tabViewBottomAccessory(isEnabled: player.currentSong != nil && !player.isExpanded) {
             if let song = player.currentSong, !player.isExpanded {
                 MiniPlayerBar(song: song)
             }
         }
+        #endif
         .fullScreenCover(isPresented: $player.isExpanded) {
             if let song = player.currentSong {
                 FullScreenPlayerView(song: song)

@@ -27,7 +27,9 @@ struct PlaylistDetailView: View {
                 }
             }
             .ignoresSafeArea(edges: .top)
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .navigationTitle(playlist.title)
             .sheet(item: $selectedSong) { song in
                 SongOptionsSheet(song: song)

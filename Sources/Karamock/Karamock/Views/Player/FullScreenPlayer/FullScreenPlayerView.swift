@@ -39,7 +39,9 @@ struct FullScreenPlayerView: View {
             }
             
             VStack(spacing:8) {
+                #if os(iOS)
                 Slider(value: $progress, in: 0...song.durationInSeconds)
+                #endif
                 HStack {
                     Text("0:00")
                     Spacer()
