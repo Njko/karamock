@@ -47,7 +47,9 @@ Pour l'ouvrir : cloner ce dépôt sur un Mac avec Xcode 26+, ouvrir `Sources/Kar
 | Concurrence Swift 6 | 19 |
 | Réseau (URLSession, lyrics.ovh) | 22 |
 | Gestion des erreurs typées (typed throws, SE-0413) | 23 |
-| Nettoyage architecture post-audit | 24+ |
+| Nettoyage architecture post-audit | 24 – 30 |
+| Multi-plateforme tvOS | 31 – 34 |
+| Interop Swift/C++ | 35+ |
 
 Le détail complet, à jour, est dans [`NOTES.md`](NOTES.md).
 

@@ -35,7 +35,7 @@ If you spot an inconsistency, bug, or stale pattern in `Sources/`: **describe it
 
 - Lessons live in `lessons/NNNN-kebab-case-slug.html`, numbered sequentially, each a **self-contained HTML file** in **French**, linking `../assets/style.css` and `../assets/quiz.js`.
 - Reuse components already in `assets/` before inventing new inline styles; add a new reusable CSS class there (not lesson-local `<style>`) when a pattern will recur.
-- Every lesson ties back to `MISSION.md` — a short "Pourquoi cette leçon" framing box near the top.
+- Every lesson ties back to `MISSION.md` — a short "Pourquoi cette leçon" framing box near the top. **Never frame it around "Tech Lead" relevance or Nicolas's career/interview prep** (explicit feedback, 2026-08-03) — other people read these lessons too; tie it to the code/concept itself instead.
 - Quizzes: exactly-comparable-length answer options (don't let the correct answer be identifiable by being longer/more detailed), vary which option is correct across questions.
 - **Never guess API, library, or framework syntax.** Verify via web search/fetch against primary sources (official docs, evolution proposals, or by directly testing — e.g. `curl` for HTTP APIs) before writing any code example. Cite the primary source in a "Sources primaires recommandées" box.
 - **Ground every lesson in the real, current state of `Sources/`** — read the actual files before describing "before" code; don't rely on a previous lesson's description of what the code used to look like, since the human often changes it independently between lessons.

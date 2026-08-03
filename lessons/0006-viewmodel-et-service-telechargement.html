@@ -12,10 +12,6 @@
   <h1>ViewModel et Service : télécharger une chanson</h1>
   <p class="subtitle">Premier maillon d'un chantier qui va s'étaler sur plusieurs leçons : sortir la logique métier des vues. On commence par le cas le plus simple à isoler — télécharger une chanson pour l'écoute hors-ligne — sans encore introduire de couche Domain/UseCase.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> <a href="../MISSION.md">MISSION.md</a> note maintenant explicitement ce manque : jusqu'ici, toutes les vues (<code>SongOptionsSheet</code>, <code>PlaylistDetailView</code>…) mélangent présentation et données mockées en dur, dans un unique dossier <code>Views</code>. Pas de ViewModel, pas de Service, pas de test possible sans lancer l'UI. C'est exactement le genre de structuration qu'un poste de Tech Lead te demandera de justifier — cette leçon pose le premier vrai exemple, sur une fonctionnalité neuve plutôt que sur du code déjà entortillé à démêler.
-  </div>
-
   <h2>Étape 0 — trois dossiers plutôt qu'un</h2>
   <p>Dans Xcode, à côté de <code>Views/</code>, crée deux nouveaux groupes : <code>ViewModels/</code> et <code>Services/</code>. On n'ajoute pas encore de <code>Domain/</code> — une couche Domain/UseCase qui ne fait qu'appeler un Service sans ajouter de règle métier est de la abstraction gratuite. On l'introduira dans une prochaine leçon, quand une vraie règle (ex. "interdire deux téléchargements simultanés à l'échelle de l'app") le justifiera.</p>
 

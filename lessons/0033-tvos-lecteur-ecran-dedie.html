@@ -12,10 +12,6 @@
   <h1>tvOS : le lecteur plein écran quitte la modale</h1>
   <p class="subtitle">Nicolas a observé un vrai bug visuel sur Apple TV : <code>FullScreenPlayerView</code>, présenté en <code>.fullScreenCover</code> depuis la Leçon 23, s'affiche sans fond et se dessine par-dessus les onglets de l'app — alors que sur iOS, la même modale couvre proprement tout l'écran. Cette leçon enquête sur la cause avant de corriger, teste le correctif le plus simple d'abord, et explique pourquoi on finit par en choisir un plus structurel : un vrai écran poussé dans une pile de navigation, pas une modale.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> un bug visuel qui n'apparaît que sur une seule plateforme est un piège classique — la réaction réflexe est de patcher le symptôme (ajouter un fond opaque) sans se demander si le mécanisme choisi (une modale) est le bon sur cette plateforme en premier lieu. Un Tech Lead distingue les deux, et documente pourquoi il choisit l'un plutôt que l'autre — pas juste "ça marche maintenant".
-  </div>
-
   <h2>L'enquête : aucune cause tvOS documentée par Apple</h2>
   <p>Avant de corriger quoi que ce soit, vérification faite spécifiquement pour cette leçon, via sous-agents spécialistes, sur trois fronts :</p>
   <ul style="margin: 0 0 16px 20px; line-height: 1.7;">

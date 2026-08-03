@@ -12,10 +12,6 @@
   <h1>Deux bugs de concurrence bien réels : Task orpheline et identité instable</h1>
   <p class="subtitle">La Leçon 19 a posé <code>actor</code>, <code>nonisolated</code> et <code>Sendable</code> comme des règles imposées par le compilateur. Les Leçons 22 et 25 ont montré ce qui se passe quand on les ignore : ça ne compile pas. Cette leçon est différente — les trois problèmes qu'elle corrige compilent très bien. Ce sont de vrais bugs, silencieux, que le compilateur Swift 6 ne peut pas voir.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> un Tech Lead qui sait discuter d'annotations d'isolation ne suffit pas — il doit savoir repérer un bug de concurrence qui compile sans se plaindre. C'est exactement le genre de question qu'on pose en entretien technique senior : "ce code compile, où est le bug ?"
-  </div>
-
   <h2>Bug #1 — La Task orpheline dans <code>DownloadSongUseCase</code></h2>
   <p>Point #1 de l'audit, marqué <strong>BUG PROD</strong> : <code>repository.add(song)</code> est appelé sans condition après la boucle, même si le téléchargement a été annulé entre-temps.</p>
   <pre><code>// Domain/Use Case/DownloadSongUseCase.swift — ACTUEL

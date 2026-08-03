@@ -12,10 +12,6 @@
   <h1>SongOptionsSheet gagne enfin son ViewModel</h1>
   <p class="subtitle">Depuis la Leçon 22, chaque écran avec une vraie logique passe par un ViewModel. <code>SongOptionsSheet</code> est le dernier à y échapper : cinq <code>@State</code> locaux et une mutation directe de <code>PlayerState</code> vivent encore dans la View. Cette leçon applique le même geste qu'en Leçon 22 — et explique pourquoi elle ne l'applique <em>pas</em> à <code>DiscoveryView</code>, contrairement à ce que suggère l'audit.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> "toujours passer par un ViewModel" n'est pas une règle à suivre aveuglément — c'est un principe à appliquer là où il y a une vraie logique à isoler, et à ne pas appliquer là où il n'y en a pas encore. Savoir distinguer les deux cas, avec un exemple concret de chaque côté, est exactement ce qu'un entretien Tech Lead teste.
-  </div>
-
   <h2>Ce que l'audit a trouvé — et où il faut le nuancer</h2>
   <p>Section 3.3 de l'audit, "Views manquant un ViewModel" : <em>"<code>DiscoveryView</code> → données mockées hardcodées, aucun VM"</em> et <em>"<code>SongOptionsSheet</code> → 5 <code>@State</code> locaux + logique métier inline"</em>. Deux cas présentés côte à côte, avec la même sévérité — mais qui ne se ressemblent pas une fois qu'on regarde le code réel de chacun.</p>
   <p><code>DiscoveryView</code> aujourd'hui :</p>

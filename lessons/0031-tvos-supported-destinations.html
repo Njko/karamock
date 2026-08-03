@@ -12,10 +12,6 @@
   <h1>Ajouter tvOS au projet : une target, plusieurs destinations</h1>
   <p class="subtitle">Le cycle Nettoyage architecture est bouclé (Leçons 24 à 30). Nouvel axe : faire tourner Karamock sur AppleTV, tel quel, sans réinventer l'UI pour la télécommande. Cette leçon couvre le mécanisme d'ajout de plateforme et les erreurs de compilation réelles qu'il révèle sur l'existant — cinq, dans cinq fichiers différents, pas une seule ni deux.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> enrichir un projet iOS existant d'une nouvelle plateforme, sans dupliquer le code ni tout réécrire, est exactement le genre de problème concret qu'un Tech Lead rencontre quand une app doit s'étendre à un nouvel appareil — la vraie compétence n'est pas de connaître tvOS par cœur, mais de savoir où chercher les limites réelles d'une API avant de les découvrir en pleine intégration.
-  </div>
-
   <h2>Le mécanisme : <em>Supported Destinations</em>, pas un nouveau target</h2>
   <p>Karamock est un target unique, créé avant Xcode 14, iOS seulement (<code>IPHONEOS_DEPLOYMENT_TARGET = 26.5</code>, <code>SDKROOT = iphoneos</code>). Le réflexe le plus intuitif — créer un second target tvOS à côté, dupliquer les fichiers — est précisément ce que Xcode 14 a rendu inutile. Documentation officielle Apple, <a href="https://developer.apple.com/documentation/xcode/configuring-a-multiplatform-app-target">"Configuring a multiplatform app target"</a> :</p>
   <blockquote>"To add a destination to a target, click the Add button (+) under Supported Destinations, and then select the destination from the pop-up menu... iOS, iPadOS, macOS, tvOS, and visionOS apps can share a single target."</blockquote>

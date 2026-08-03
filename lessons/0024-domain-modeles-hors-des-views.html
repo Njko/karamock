@@ -12,10 +12,6 @@
   <h1>Le Domain a besoin d'un vrai chez-lui</h1>
   <p class="subtitle">L'audit Clean Architecture du 28 juillet (<code>audits/2026-07-28-clean-architecture-audit.md</code>) note le Domain à 4.5/10 : "quasi-vide — entités métier dispersées dans <code>Views/</code>". Cette leçon ouvre un court arc dédié à résoudre ce que l'audit a remonté, dans l'ordre du risque le plus faible au plus élevé. On commence par le plus sûr : déplacer des fichiers, sans changer une seule ligne de logique.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> la mission prévoyait une architecture en couches introduite "pour être capable de discuter de structuration d'app à un niveau Tech Lead". Réagir à un audit externe — trier ce qui est vraiment un risque de ce qui est cosmétique, corriger dans le bon ordre — est exactement ce réflexe-là en action, pas une leçon de plus sur la théorie des couches.
-  </div>
-
   <h2>Ce que l'audit a trouvé</h2>
   <p>Trois constats précis, tous vérifiés dans le code actuel :</p>
   <ul>

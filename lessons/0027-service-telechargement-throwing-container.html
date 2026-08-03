@@ -12,10 +12,6 @@
   <h1>Le service de téléchargement devient réel : throwing, container, annulation propre</h1>
   <p class="subtitle">La Leçon 26 a rendu l'annulation d'un téléchargement fiable de bout en bout. Il reste trois trous dans le même service : <code>SongDownloading</code> ne peut techniquement jamais échouer (<code>DownloadState.failed</code> est du code mort), <code>MockSongDownloading</code> est câblé en dur dans le container sans jamais être déclaré comme dépendance, et le mock avale silencieusement les annulations avec un <code>try?</code>. Cette leçon ferme les trois.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> un service qui ne peut jamais échouer n'est pas un vrai service, c'est une démo. Savoir faire remonter un échec proprement à travers un flux asynchrone — sans casser l'annulation qui vient d'être corrigée — est exactement le genre de sujet qu'un Tech Lead doit pouvoir dérouler en entretien.</p>
-  </div>
-
   <h2>Ce que l'audit a trouvé</h2>
   <p>Trois lignes distinctes dans l'audit, toutes sur le même service :</p>
   <ul>

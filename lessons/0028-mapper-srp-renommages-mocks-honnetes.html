@@ -12,10 +12,6 @@
   <h1>Le Repository range, le Mapper transforme — et deux noms qui mentaient</h1>
   <p class="subtitle">Cette leçon regroupe quatre corrections plus petites que les précédentes, mais toutes du même ordre : un nom ou un emplacement qui ne dit pas la vérité sur ce que fait vraiment le code. Une leçon nécessite aussi de contredire l'audit sur un point précis — pas parce qu'il avait tort en général, mais parce que les Leçons 26 et 27 ont changé la réalité qu'il décrivait.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> suivre une checklist d'audit sans la reconsidérer face au code réel n'est pas ce qu'on attend d'un Tech Lead — c'est justement le travail de vérifier qu'une recommandation reste valable avant de l'appliquer. Cette leçon en est un exemple concret et assumé.
-  </div>
-
   <h2>1. Extraire <code>LyricsMapper</code> : le Repository range, il ne transforme pas</h2>
   <p>Point #8 de l'audit : <em>"Le calcul des timestamps (<code>Double(index) * (duration / lines.count)</code>) est de la logique métier dans un Repository. Un Repository récupère/stocke ; un Mapper transforme."</em></p>
   <pre><code>// Repositories/CachedLyricsRepository.swift — ACTUEL

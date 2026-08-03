@@ -12,10 +12,6 @@
   <h1>Inverser la dépendance : les protocoles vivent dans Domain, pas dans Data</h1>
   <p class="subtitle">La Leçon 24 a sorti les entités métier des dossiers <code>Views/</code>. L'audit signale un problème voisin, plus subtil : les <em>contrats</em> (<code>LyricsRepository</code>, <code>DownloadedSongsRepository</code>, <code>SongDownloading</code>, <code>LyricsFetching</code>) sont eux aussi déclarés hors du Domain — dans les fichiers mêmes de leurs implémentations. Cette leçon les en sort, sans changer un seul comportement.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> la mission voulait une architecture en couches "pour être capable de discuter de structuration d'app à un niveau Tech Lead". Le sujet ici a un nom précis en ingénierie logicielle — le Dependency Inversion Principle (le "D" de SOLID) — et c'est le genre de vocabulaire qu'on doit pouvoir relier à du code concret en entretien, pas seulement réciter.
-  </div>
-
   <h2>Ce que l'audit a trouvé</h2>
   <p>Point #4 de l'audit : <em>"<code>LyricsRepository</code>, <code>DownloadedSongsRepository</code>, <code>SongDownloading</code> sont définis dans les couches Data/Services. La couche Domain dépend d'eux sans les 'posséder' — violation directe du Dependency Inversion Principle."</em></p>
   <pre><code>// ACTUEL (incorrect)

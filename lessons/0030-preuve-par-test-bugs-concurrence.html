@@ -12,10 +12,6 @@
   <h1>Preuve par test : les bugs de concurrence de la Leçon 26 ne reviendront pas</h1>
   <p class="subtitle">La Leçon 13 a posé Swift Testing et Factory comme outil de vérification. La Leçon 26 a corrigé trois bugs silencieux — une Task orpheline, un identifiant instable — que le compilateur Swift 6 ne pouvait pas voir. Cette leçon relie les deux : trois tests, chacun écrit pour qu'un futur refactor malheureux le fasse échouer immédiatement, plutôt que de laisser le bug revenir sans bruit.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> "j'ai corrigé ce bug" est une phrase faible en entretien Tech Lead. "J'ai corrigé ce bug, et voici le test qui échoue si quelqu'un le réintroduit" en est une autre. Cette leçon referme le cycle Nettoyage architecture (Leçons 24 à 30) sur exactement cette distinction.
-  </div>
-
   <h2>Test 1 — l'identité de <code>Song</code> reste stable</h2>
   <p>Bug #3 de la Leçon 26 : <code>Song.id</code> est passé d'un <code>UUID()</code> tiré au sort à chaque construction à une valeur calculée à partir de <code>artist</code>/<code>title</code>. Le test le plus direct : construire deux fois la <em>même</em> chanson, séparément, et vérifier que leurs identifiants concordent.</p>
   <pre><code>// KaramockTests/Domain/SongIdentityTests.swift
