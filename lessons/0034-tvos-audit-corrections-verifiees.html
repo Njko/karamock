@@ -12,10 +12,6 @@
   <h1>Un audit tvOS passé au crible : ce qu'on corrige, ce qu'on refuse</h1>
   <p class="subtitle">Un audit externe (<code>audits/2026-08-02-tvos-audit.md</code>, 3 agents Copilot spécialisés, note globale 4.2/10) a listé 22 problèmes sur Karamock tvOS. Avant d'en corriger un seul, chaque remarque a été vérifiée contre la doc Apple officielle et contre le code réel — deux des six problèmes "critiques" se sont révélés factuellement faux, un troisième proposait d'annuler le correctif de la Leçon 33. Cette leçon applique les corrections qui ont survécu à la vérification, et documente pourquoi les autres sont refusées.</p>
 
-  <div class="mission-tie">
-    <strong>Pourquoi cette leçon :</strong> un audit — humain ou généré par IA — n'est jamais une vérité à appliquer telle quelle. Un Tech Lead sait relire un rapport de qualité avec le même niveau d'exigence que du code : chaque affirmation vérifiable doit l'être avant d'engager du travail dessus, sinon on répare des bugs qui n'existent pas et on en introduit de vrais en suivant des recommandations non vérifiées.
-  </div>
-
   <h2>Le audit, réévalué : 4 sous-agents spécialistes, verdict par verdict</h2>
   <table class="compare-table">
     <tr><th>Remarque de l'audit</th><th>Verdict vérifié</th></tr>
@@ -40,18 +36,23 @@
   <h2>Corrections adoptées</h2>
 
   <div class="mission-tie">
-    <strong>État réel de l'implémentation (comparé le 2026-08-03) :</strong> 7 des 10 correctifs ci-dessous sont déjà appliqués mot pour mot par Nicolas — <code>.onPlayPauseCommand</code> (les deux fichiers), <code>.focusSection()</code>, les labels de temps, les tailles <code>PlaylistCard</code>/<code>SongRow</code>/<code>SongHeader</code>, l'espacement de <code>SongOptionsForm</code>, <code>StretchyView</code>, et <code>.refreshable</code>. Trois ne le sont pas encore, par simple omission — le code enseigné plus bas reste correct, juste pas encore recopié dans le projet : les labels d'accessibilité paramétrés et l'agrandissement des boutons de <code>FocusStepperTV</code> (section 4), la hauteur tvOS de <code>PlaylistCoverHeader</code> (section 5, dernière ligne du tableau), et <code>.focusable()</code> sur <code>LyricsView</code> (aside en fin de section). Rien à corriger dans le contenu ci-dessous — juste à finir de l'appliquer.
+    <strong>État réel de l'implémentation (comparé le 2026-08-03, mis à jour après la Leçon 35) :</strong> 7 des 10 correctifs ci-dessous sont déjà appliqués par Nicolas — <code>.onPlayPauseCommand</code> (les deux fichiers), <code>.focusSection()</code>, les labels de temps, les tailles <code>PlaylistCard</code>/<code>SongRow</code>/<code>SongHeader</code>, l'espacement de <code>SongOptionsForm</code>, <code>StretchyView</code>, et <code>.refreshable</code>. Trois ne le sont pas encore, par simple omission — le code enseigné plus bas reste correct, juste pas encore recopié dans le projet : les labels d'accessibilité paramétrés et l'agrandissement des boutons de <code>FocusStepperTV</code> (section 4), la hauteur tvOS de <code>PlaylistCoverHeader</code> (section 5, dernière ligne du tableau), et <code>.focusable()</code> sur <code>LyricsView</code> (aside en fin de section). Un vrai correctif restait nécessaire dans le contenu ci-dessous : le code <code>.onPlayPauseCommand</code> de la section 1 manquait une garde <code>#if os(tvOS)</code>, ce qui cassait la compilation iOS — repéré et corrigé par Nicolas pendant la Leçon 35 (build croisé iOS/tvOS), et corrigé ici en conséquence.
   </div>
 
   <h3>1. Télécommande Siri Remote — <code>.onPlayPauseCommand</code></h3>
   <p>Vrai manque confirmé : aucun handler pour le bouton physique Play/Pause. Point notable au-delà du simple "il en manque un" : c'est une commande télécommande <em>globale</em>, pas un second <code>Button</code> focusable — elle donne à <code>MiniPlayerBarTV</code> un contrôle play/pause sans violer la règle "un seul élément focusable par composant" décidée en Leçon 32 (c'est précisément pour cette raison que <code>MiniPlayerBarTV</code> n'avait pas de bouton play/pause dédié jusqu'ici).</p>
   <pre><code>// FullScreenPlayerView.swift — sur le VStack principal
 .padding()
+#if os(tvOS)
 .onPlayPauseCommand { player.isPlaying.toggle() }
+#endif
 
 // MiniPlayerBarTV.swift — sur le Button
 .buttonStyle(.plain)
-.onPlayPauseCommand { player.isPlaying.toggle() }</code></pre>
+#if os(tvOS)
+.onPlayPauseCommand { player.isPlaying.toggle() }
+#endif</code></pre>
+  <p><strong>Correction (2026-08-03) :</strong> le code enseigné ici manquait à l'origine la garde <code>#if os(tvOS)</code>. Comme <code>FullScreenPlayerView.swift</code> et <code>MiniPlayerBarTV.swift</code> compilent pour les deux destinations (mécanisme de la Leçon 31, pas de séparation de target), un appel <code>.onPlayPauseCommand</code> non gardé — API tvOS 13+ exclusive — casse la compilation côté iOS. Ce n'était pas visible tant que seule la destination tvOS était buildée ; le bug a été repéré et corrigé par Nicolas pendant la Leçon 35, à l'étape de son scénario de vérification qui impose un build iOS <strong>et</strong> tvOS.</p>
 
   <h3>2. Focus Engine — <code>.focusSection()</code> sur l'overlay mini-lecteur</h3>
   <p>Confirmé tvOS 15+ : guide le Focus Engine pour qu'il atteigne correctement une zone d'overlay (comme <code>MiniPlayerBarTV</code>, posée par-dessus le <code>TabView</code> plutôt qu'intégrée à sa hiérarchie normale).</p>
@@ -293,7 +294,7 @@ ScrollView {
 
   <div class="lesson-nav">
     <span><a href="0033-tvos-lecteur-ecran-dedie.html">← Leçon 33 : le lecteur plein écran quitte la modale</a></span>
-    <span>Leçon suivante : à venir</span>
+    <span><a href="0035-cpp-interop-mecanisme.html">Leçon 35 : ajouter du C++ à Karamock, le mécanisme →</a></span>
   </div>
 
 </div>
