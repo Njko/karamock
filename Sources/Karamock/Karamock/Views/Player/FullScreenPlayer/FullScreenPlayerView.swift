@@ -81,7 +81,9 @@ struct FullScreenPlayerView: View {
             Spacer()
         }
         .padding()
+        #if os(tvOS)
         .onPlayPauseCommand { player.isPlaying.toggle() }
+        #endif
         .onReceive(timer) { _ in
             guard player.isPlaying, progress < song.durationInSeconds else { return }
             progress += 0.5

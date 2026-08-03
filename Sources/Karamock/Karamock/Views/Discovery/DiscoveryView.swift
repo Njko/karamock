@@ -12,6 +12,7 @@ struct DiscoveryView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    Text("C++ check: \(lyricsTimingCheck(41))")
                     PlaylistSection(playlists: mockPlaylist)
                     
                 }
