@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 34 — Un audit tvOS passé au crible</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 34 · Multi-plateforme (4/N)</p>
+  <h1>Un audit tvOS passé au crible : ce qu'on corrige, ce qu'on refuse</h1>
+  <p class="subtitle">Un audit externe (<code>audits/2026-08-02-tvos-audit.md</code>, 3 agents Copilot spécialisés, note globale 4.2/10) a listé 22 problèmes sur Karamock tvOS. Avant d'en corriger un seul, chaque remarque a été vérifiée contre la doc Apple officielle et contre le code réel — deux des six problèmes "critiques" se sont révélés factuellement faux, un troisième proposait d'annuler le correctif de la Leçon 33. Cette leçon applique les corrections qui ont survécu à la vérification, et documente pourquoi les autres sont refusées.</p>
+
+  <div class="mission-tie">
+    <strong>Pourquoi cette leçon :</strong> un audit — humain ou généré par IA — n'est jamais une vérité à appliquer telle quelle. Un Tech Lead sait relire un rapport de qualité avec le même niveau d'exigence que du code : chaque affirmation vérifiable doit l'être avant d'engager du travail dessus, sinon on répare des bugs qui n'existent pas et on en introduit de vrais en suivant des recommandations non vérifiées.
+  </div>
+
+  <h2>Le audit, réévalué : 4 sous-agents spécialistes, verdict par verdict</h2>
+  <table class="compare-table">
+    <tr><th>Remarque de l'audit</th><th>Verdict vérifié</th></tr>
+    <tr><td>C1 — <code>.sheet()</code> "ignoré silencieusement sur tvOS"</td><td>🟡 Contredit par le HIG ("a sheet is always modal" sur tvOS — elle s'affiche, juste toujours en plein modal). À confirmer sur device pour le cas précis <code>.sheet(item:)</code> déclenché depuis une liste.</td></tr>
+    <tr><td>C2 — <code>NavigationStack</code> imbriqués = "comportement indéfini, plante"</td><td>🔴 Faux tel que formulé. La doc ne traite simplement pas ce cas — et c'est la structure qui tourne depuis la Leçon 33, sans plantage rapporté.</td></tr>
+    <tr><td>C4 — <code>MiniPlayerBar.swift</code> "compile error sur tvOS (API iOS 18+)"</td><td>🔴 Faux. <code>tabViewBottomAccessoryPlacement</code> est tvOS 26.0+ — disponible sur les deux plateformes, en même temps.</td></tr>
+    <tr><td>C5 — <code>.borderedProminent</code>/<code>.bordered</code> "n'existent pas sur tvOS"</td><td>🔴 Faux. Confirmés tvOS 15.0+ et 13.0+ respectivement, doc officielle à l'appui.</td></tr>
+    <tr><td>I1/M1/M5 — <code>.buttonStyle(.plain)</code> "supprime le halo de focus"</td><td>🔴 Faux. La doc de <code>PlainButtonStyle</code> dit elle-même qu'il "peut appliquer un effet visuel pour indiquer... l'état focus" — il retire le chrome au repos, pas le focus.</td></tr>
+    <tr><td>I3 — Revenir à <code>fullScreenCover</code> + <code>persistentSystemOverlays</code></td><td>🔴 À rejeter. Réintroduirait probablement le bug corrigé en Leçon 33 ; <code>persistentSystemOverlays</code> ne documente aucun effet pertinent sur tvOS.</td></tr>
+    <tr><td>C3 — <code>.onPlayPauseCommand()</code> absent</td><td>✅ Confirmé, réel, tvOS 13+ exclusif.</td></tr>
+    <tr><td>I10 — <code>.focusSection()</code> manquant sur l'overlay mini-lecteur</td><td>✅ Confirmé, tvOS 15+, peu coûteux.</td></tr>
+    <tr><td>I4 — Labels de temps "0:00" figés</td><td>✅ Confirmé en lisant le fichier — mais pas spécifique à tvOS (identique sur iOS).</td></tr>
+    <tr><td>C6/I9 — Boutons précédent/suivant vides, <code>PlayerState</code> à enrichir</td><td>✅ Vrai, mais hors périmètre : pas un bug tvOS, et enrichir <code>PlayerState</code> (playlist, index) est un chantier produit, pas un correctif de plateforme.</td></tr>
+    <tr><td>I7/I8/M2-M9 — Tailles, espacements, polices</td><td>✅ Tous vérifiés exacts dans le code, cohérents avec les conventions tvOS 10 pieds.</td></tr>
+  </table>
+
+  <details class="aside">
+    <summary>Pourquoi C6/I9 ne sont pas traités ici, alors qu'ils sont bien réels</summary>
+    <p>Les boutons précédent/suivant vides et les manques de <code>PlayerState</code> existent sur iOS comme sur tvOS — ce n'est pas un problème de plateforme, c'est une fonctionnalité jamais construite. Les corriger demanderait d'ajouter <code>playlist</code>, <code>currentIndex</code>, <code>playNext()</code>, <code>playPrevious()</code> à <code>PlayerState</code> : un vrai morceau de travail produit, pas un correctif tvOS. L'audit est un instantané utile, pas une spécification à exécuter telle quelle — ce point reste noté pour une leçon dédiée, si Nicolas le demande, plutôt que traité en douce ici.</p>
+  </details>
+
+  <h2>Corrections adoptées</h2>
+
+  <div class="mission-tie">
+    <strong>État réel de l'implémentation (comparé le 2026-08-03) :</strong> 7 des 10 correctifs ci-dessous sont déjà appliqués mot pour mot par Nicolas — <code>.onPlayPauseCommand</code> (les deux fichiers), <code>.focusSection()</code>, les labels de temps, les tailles <code>PlaylistCard</code>/<code>SongRow</code>/<code>SongHeader</code>, l'espacement de <code>SongOptionsForm</code>, <code>StretchyView</code>, et <code>.refreshable</code>. Trois ne le sont pas encore, par simple omission — le code enseigné plus bas reste correct, juste pas encore recopié dans le projet : les labels d'accessibilité paramétrés et l'agrandissement des boutons de <code>FocusStepperTV</code> (section 4), la hauteur tvOS de <code>PlaylistCoverHeader</code> (section 5, dernière ligne du tableau), et <code>.focusable()</code> sur <code>LyricsView</code> (aside en fin de section). Rien à corriger dans le contenu ci-dessous — juste à finir de l'appliquer.
+  </div>
+
+  <h3>1. Télécommande Siri Remote — <code>.onPlayPauseCommand</code></h3>
+  <p>Vrai manque confirmé : aucun handler pour le bouton physique Play/Pause. Point notable au-delà du simple "il en manque un" : c'est une commande télécommande <em>globale</em>, pas un second <code>Button</code> focusable — elle donne à <code>MiniPlayerBarTV</code> un contrôle play/pause sans violer la règle "un seul élément focusable par composant" décidée en Leçon 32 (c'est précisément pour cette raison que <code>MiniPlayerBarTV</code> n'avait pas de bouton play/pause dédié jusqu'ici).</p>
+  <pre><code>// FullScreenPlayerView.swift — sur le VStack principal
+.padding()
+.onPlayPauseCommand { player.isPlaying.toggle() }
+
+// MiniPlayerBarTV.swift — sur le Button
+.buttonStyle(.plain)
+.onPlayPauseCommand { player.isPlaying.toggle() }</code></pre>
+
+  <h3>2. Focus Engine — <code>.focusSection()</code> sur l'overlay mini-lecteur</h3>
+  <p>Confirmé tvOS 15+ : guide le Focus Engine pour qu'il atteigne correctement une zone d'overlay (comme <code>MiniPlayerBarTV</code>, posée par-dessus le <code>TabView</code> plutôt qu'intégrée à sa hiérarchie normale).</p>
+  <pre><code>// RootTabView.swift
+.overlay(alignment: .bottom) {
+    if let song = player.currentSong, !player.isExpanded {
+        MiniPlayerBarTV(song: song)
+            .padding(.horizontal, 60)
+            .padding(.bottom, 40)
+            .focusSection()
+    }
+}</code></pre>
+
+  <h3>3. Labels de temps figés (bug général, corrigé au passage)</h3>
+  <p>Confirmé en lisant le fichier : <code>Text("0:00")</code> est un texte en dur, jamais mis à jour. Un helper <code>formatTime(_:)</code> existe déjà dans <code>Views/Common/TimeFormatter.swift</code> — pas besoin d'en écrire un nouveau.</p>
+  <pre><code>// FullScreenPlayerView.swift
+HStack {
+    Text(formatTime(progress))
+    Spacer()
+    Text("-" + formatTime(song.durationInSeconds - progress))
+}
+.font(.caption)
+.foregroundStyle(.secondary)</code></pre>
+
+  <h3>4. Labels d'accessibilité de <code>FocusStepperTV</code> — paramétrés, pas codés en dur</h3>
+  <p>L'audit proposait de remplacer "Diminuer"/"Augmenter" par "Reculer de 10s"/"Avancer de 10s" (M6) — un correctif faux par excès de généralisation : <code>FocusStepperTV</code> est un composant partagé entre trois contextes (tonalité, tempo, progression), et "reculer de 10s" n'a aucun sens pour un réglage de tonalité. Le vrai correctif est de paramétrer les labels, pas de les figer sur un seul usage :</p>
+  <pre><code>// FocusStepperTV.swift
+struct FocusStepperTV: View {
+    let onDecrement: () -> Void
+    let onIncrement: () -> Void
+    var decrementDisabled = false
+    var incrementDisabled = false
+    var decrementLabel = "Diminuer"
+    var incrementLabel = "Augmenter"
+
+    var body: some View {
+        HStack(spacing: 24) {
+            Button(action: onDecrement) {
+                Image(systemName: "minus.circle.fill")
+            }
+            .disabled(decrementDisabled)
+            .accessibilityLabel(decrementLabel)
+
+            Button(action: onIncrement) {
+                Image(systemName: "plus.circle.fill")
+            }
+            .disabled(incrementDisabled)
+            .accessibilityLabel(incrementLabel)
+        }
+        #if os(tvOS)
+        .font(.system(size: 40))
+        #else
+        .font(.title2)
+        #endif
+        .buttonStyle(.plain)
+    }
+}</code></pre>
+  <p>Les valeurs par défaut ("Diminuer"/"Augmenter") restent correctes pour tonalité et tempo — seul l'appel de <code>FullScreenPlayerView</code> pour la progression a besoin de labels spécifiques :</p>
+  <pre><code>// FullScreenPlayerView.swift
+FocusStepperTV(
+    onDecrement: { progress = max(0, progress - 10) },
+    onIncrement: { progress = min(song.durationInSeconds, progress + 10) },
+    decrementDisabled: progress <= 0,
+    incrementDisabled: progress >= song.durationInSeconds,
+    decrementLabel: "Reculer de 10 secondes",
+    incrementLabel: "Avancer de 10 secondes"
+)</code></pre>
+  <p>Sur la taille : l'audit suggérait <code>frame(width: 80, height: 80)</code> sur les boutons. Écarté au profit d'une police plus grande (<code>.system(size: 40)</code>) — ce sont des icônes SF Symbols sans fond ni bordure ; un <code>frame</code> invisible autour d'une petite icône ajoute de l'espace vide autour d'elle, une police plus grande agrandit réellement ce qui est visible à l'écran.</p>
+
+  <h3>5. Tailles pour l'écran grand format (10 pieds)</h3>
+  <p>Toutes vérifiées exactes dans le code actuel — correctifs appliqués via <code>#if os(tvOS)</code>, sans toucher au rendu iOS :</p>
+  <table class="compare-table">
+    <tr><th>Fichier</th><th>iOS (inchangé)</th><th>tvOS (nouveau)</th></tr>
+    <tr><td><code>PlaylistCard.swift</code></td><td>150×150 pt</td><td>280×280 pt</td></tr>
+    <tr><td><code>SongRow.swift</code> — artwork</td><td>50×50 pt</td><td>80×80 pt</td></tr>
+    <tr><td><code>SongRow.swift</code> — padding vertical</td><td>4 pt</td><td>16 pt</td></tr>
+    <tr><td><code>SongHeader.swift</code> — artwork</td><td>60×60 pt</td><td>100×100 pt</td></tr>
+    <tr><td><code>SongHeader.swift</code> — police des métadonnées</td><td><code>.caption</code></td><td><code>.callout</code></td></tr>
+    <tr><td><code>PlaylistCoverHeader.swift</code> — hauteur</td><td>220 pt</td><td>400 pt</td></tr>
+    <tr><td><code>SongOptionsForm.swift</code> — espacement cartes de mode</td><td>12 pt</td><td>24 pt</td></tr>
+  </table>
+  <pre><code>// Exemple — PlaylistCard.swift
+LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+    #if os(tvOS)
+    .frame(width: 280, height: 280)
+    #else
+    .frame(width: 150, height: 150)
+    #endif</code></pre>
+  <p>Même geste pour les cinq autres fichiers du tableau — un seul <code>#if os(tvOS)/#else</code> par valeur concernée, aucune restructuration.</p>
+
+  <h3>6. <code>StretchyView</code> désactivée sur tvOS</h3>
+  <p>Le geste de scroll tvOS (surface tactile de la télécommande, discret) rend l'effet d'étirement peu pertinent — actuellement appliqué sans condition de plateforme :</p>
+  <pre><code>// StretchyView.swift
+extension View {
+    func stretchy() -> some View {
+        #if os(iOS)
+        visualEffect { effect, geometry in
+            let currentHeight = geometry.size.height
+            let scrollOffset = geometry.frame(in: .scrollView).minY
+            let positiveOffset = max(0, scrollOffset)
+            let scaleFactor = (currentHeight + positiveOffset) / currentHeight
+            return effect.scaleEffect(x: scaleFactor, y: scaleFactor, anchor: .bottom)
+        }
+        #else
+        self
+        #endif
+    }
+}</code></pre>
+
+  <h3>7. <code>.refreshable</code> retiré sur tvOS</h3>
+  <p>Confirmé disponible tvOS 15+ (ne casse rien, contrairement à ce qu'aurait pu laisser croire une lecture rapide de l'audit) — mais sa doc officielle ne décrit le geste "tirer pour rafraîchir" que pour iOS/iPadOS. Sur tvOS, ce geste n'a pas d'équivalent télécommande : le modificateur ne fait rien de mal, il est juste mort. Retiré pour ne pas laisser du code qui ne peut jamais se déclencher :</p>
+  <pre><code>// LibraryView.swift
+#if os(iOS)
+.refreshable { await viewModel.refresh() }
+#endif</code></pre>
+
+  <details class="aside">
+    <summary>Correctif tenté mais non garanti : <code>.focusable()</code> sur <code>LyricsView</code></summary>
+    <p>L'audit signale que le <code>ScrollView</code> des paroles ne reçoit pas le focus sur tvOS, empêchant la navigation manuelle dedans (I2) — plausible, puisqu'il ne contient que des <code>Text</code>, aucun élément focusable. Recherche menée avant d'écrire cette leçon : aucune documentation officielle Apple ne confirme que <code>.focusable()</code> active réellement le défilement par swipe sur une <code>ScrollView</code> — seulement qu'il en fait une cible de focus. Appliqué quand même, à titre d'essai documenté :</p>
+    <pre><code>// LyricsView.swift
+ScrollView {
+    ...
+}
+#if os(tvOS)
+.focusable()
+#endif</code></pre>
+    <p>À vérifier concrètement une fois buildé : le défilement manuel des paroles fonctionne-t-il réellement, ou seul le défilement automatique (piloté par <code>currentTime</code>) reste actif ? Si <code>.focusable()</code> seul ne suffit pas, ce sera le sujet d'une leçon dédiée plutôt qu'une hypothèse non vérifiée de plus.</p>
+  </details>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build (⌘B) sur le simulateur Apple TV et sur un simulateur iPhone : les deux doivent réussir, aucun changement de rendu attendu sur iOS.</li>
+      <li>Sur le simulateur Apple TV (Hardware → touche Play/Pause, ou raccourci équivalent) : vérifie que la lecture bascule play/pause depuis le lecteur plein écran ET depuis le mini-lecteur, sans qu'aucun des deux n'ait le focus.</li>
+      <li>Vérifie que le focus atteint bien <code>MiniPlayerBarTV</code> en naviguant vers le bas depuis les onglets.</li>
+      <li>Ouvre le lecteur plein écran : les temps affichés ("0:12", "-2:45"...) doivent maintenant évoluer avec la lecture, plus jamais "0:00" figé.</li>
+      <li>Sur les réglages de tonalité/tempo/progression, active VoiceOver (Apple TV Remote app ou simulateur) et vérifie que les labels lus sont différents selon le contexte (tonalité/tempo vs "Reculer de 10 secondes").</li>
+      <li>Compare visuellement les cartes de playlist, les lignes de chanson et l'en-tête de playlist entre iPhone et Apple TV : les éléments doivent être nettement plus grands sur tvOS, sans rien casser sur iOS.</li>
+      <li>Dans les paroles du lecteur plein écran, essaie de faire défiler manuellement avec la télécommande : note si ça fonctionne réellement (point non garanti signalé plus haut).</li>
+      <li>Dans la Bibliothèque sur tvOS, vérifie qu'aucun geste "tirer pour rafraîchir" n'est proposé ni ne bloque quoi que ce soit.</li>
+    </ol>
+  </div>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://developer.apple.com/documentation/swiftui/environmentvalues/tabviewbottomaccessoryplacement">tabViewBottomAccessoryPlacement</a> — tvOS 26.0+, réfute C4.<br>
+    <a href="https://developer.apple.com/documentation/swiftui/borderedprominentbuttonstyle">BorderedProminentButtonStyle</a> — tvOS 15.0+, réfute C5.<br>
+    <a href="https://developer.apple.com/documentation/swiftui/plainbuttonstyle">PlainButtonStyle</a> — "may apply a visual effect to indicate... the focused... state", réfute I1/M1/M5.<br>
+    <a href="https://developer.apple.com/documentation/swiftui/view/persistentsystemoverlays(_:)">persistentSystemOverlays(_:)</a> — aucun effet tvOS documenté, réfute la solution proposée en I3.<br>
+    <a href="https://developer.apple.com/documentation/swiftui/view/onplaypausecommand(perform:)">onPlayPauseCommand(perform:)</a> — tvOS 13.0+ exclusif.<br>
+    <a href="https://developer.apple.com/documentation/swiftui/view/focussection()">focusSection()</a> — macOS 13+/tvOS 15+.<br>
+    <a href="https://developer.apple.com/documentation/swiftui/view/refreshable(action:)">refreshable(action:)</a> — tvOS 15+, geste "pull-to-refresh" décrit uniquement pour iOS/iPadOS.<br>
+    <a href="https://developer.apple.com/documentation/swiftui/view/focusable(_:)">focusable(_:)</a> — "Specifies if the view is focusable", aucune mention de défilement par swipe.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi l'affirmation C4 de l'audit ("MiniPlayerBar.swift ne compile pas sur tvOS, API iOS 18+") était-elle fausse ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce que MiniPlayerBar.swift n'est de toute façon jamais compilé sur tvOS</label>
+    <label><input type="radio" name="q1" value="b"> Parce que tabViewBottomAccessoryPlacement a été retiré depuis iOS 18</label>
+    <label><input type="radio" name="q1" value="c"> Parce que tabViewBottomAccessoryPlacement est en réalité tvOS 26.0+ — disponible sur les deux plateformes, à la même version</label>
+    <label><input type="radio" name="q1" value="d"> Parce que les erreurs de compilation n'existent pas sur les environnements de test Copilot</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Que dit précisément la documentation officielle de PlainButtonStyle sur son rapport au focus tvOS ?</p>
+    <label><input type="radio" name="q2" value="a"> Qu'il désactive complètement le Focus Engine pour le bouton concerné</label>
+    <label><input type="radio" name="q2" value="b"> Qu'il ne décore pas le contenu au repos, mais peut appliquer un effet visuel pour l'état focus</label>
+    <label><input type="radio" name="q2" value="c"> Qu'il est réservé aux plateformes sans télécommande</label>
+    <label><input type="radio" name="q2" value="d"> Qu'il remplace automatiquement le halo par une bordure statique</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi cette leçon rejette-t-elle la recommandation I3 de l'audit (revenir à fullScreenCover pour le lecteur plein écran) ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que fullScreenCover n'est plus disponible du tout sur tvOS</label>
+    <label><input type="radio" name="q3" value="b"> Parce que NavigationStack est obligatoire depuis tvOS 18</label>
+    <label><input type="radio" name="q3" value="c"> Parce que persistentSystemOverlays nécessite iOS 26 minimum</label>
+    <label><input type="radio" name="q3" value="d"> Parce que ça réintroduirait probablement le bug d'opacité corrigé en Leçon 33, et le correctif proposé (persistentSystemOverlays) ne documente aucun effet pertinent sur tvOS</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. Pourquoi .onPlayPauseCommand est-il particulièrement adapté à MiniPlayerBarTV, au-delà du simple fait qu'un contrôle manquait ?</p>
+    <label><input type="radio" name="q4" value="a"> C'est une commande télécommande globale, pas un second Button focusable — elle ajoute un contrôle play/pause sans violer la règle "un seul élément focusable par composant" de la Leçon 32</label>
+    <label><input type="radio" name="q4" value="b"> Parce qu'il remplace automatiquement le Button existant du lecteur plein écran</label>
+    <label><input type="radio" name="q4" value="c"> Parce qu'il fonctionne uniquement quand MiniPlayerBarTV a le focus</label>
+    <label><input type="radio" name="q4" value="d"> Parce que c'est la seule API disponible sur tvOS 13 pour contrôler la lecture</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">5. Pourquoi les boutons précédent/suivant vides (C6) et l'enrichissement de PlayerState (I9) ne sont-ils pas traités dans cette leçon, bien que confirmés réels ?</p>
+    <label><input type="radio" name="q5" value="a"> Parce que la recherche n'a pas pu confirmer que ces boutons existent vraiment dans le code</label>
+    <label><input type="radio" name="q5" value="b"> Parce que playNext()/playPrevious() ne compilent pas sur tvOS</label>
+    <label><input type="radio" name="q5" value="c"> Parce que ce n'est pas un problème spécifique à tvOS (identique sur iOS), et que la solution est un chantier produit, pas un correctif de plateforme</label>
+    <label><input type="radio" name="q5" value="d"> Parce que PlayerState est un type en lecture seule dans cette version du projet</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">6. Pourquoi le correctif de labels d'accessibilité de FocusStepperTV proposé par l'audit ("Reculer de 10s"/"Avancer de 10s", M6) était-il incorrect tel quel ?</p>
+    <label><input type="radio" name="q6" value="a"> Parce que VoiceOver n'existe pas sur tvOS</label>
+    <label><input type="radio" name="q6" value="b"> Parce que FocusStepperTV est partagé entre 3 contextes différents (tonalité, tempo, progression) — "reculer de 10s" n'a aucun sens pour une tonalité</label>
+    <label><input type="radio" name="q6" value="c"> Parce que accessibilityLabel ne peut pas être une chaîne dynamique</label>
+    <label><input type="radio" name="q6" value="d"> Parce que les labels d'accessibilité sont ignorés par le Focus Engine</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">7. Pourquoi les boutons +/- de FocusStepperTV sont-ils agrandis via la taille de police plutôt qu'un frame(width: 80, height: 80) comme le suggérait l'audit ?</p>
+    <label><input type="radio" name="q7" value="a"> Parce que frame(width:height:) n'est pas disponible sur tvOS</label>
+    <label><input type="radio" name="q7" value="b"> Parce que 80 points est trop petit pour la distance de visionnage tvOS</label>
+    <label><input type="radio" name="q7" value="c"> Parce que la police est plus rapide à faire évoluer dynamiquement que le frame</label>
+    <label><input type="radio" name="q7" value="d"> Parce que ce sont des icônes SF Symbols sans fond ni bordure — un frame invisible ajoute de l'espace vide, une police plus grande agrandit réellement ce qui est visible</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">8. Que dit exactement la recherche menée pour cette leçon sur le correctif .focusable() de LyricsView ?</p>
+    <label><input type="radio" name="q8" value="a"> Aucune documentation officielle ne confirme qu'il active réellement le défilement par swipe — seulement qu'il fait de la vue une cible de focus, à vérifier empiriquement</label>
+    <label><input type="radio" name="q8" value="b"> La documentation Apple confirme explicitement qu'il active le défilement par swipe sur tvOS</label>
+    <label><input type="radio" name="q8" value="c"> focusable() est en réalité interdit sur les ScrollView contenant uniquement du texte</label>
+    <label><input type="radio" name="q8" value="d"> Le défilement des paroles ne peut de toute façon jamais être manuel sur tvOS</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le défilement manuel des paroles ne fonctionne pas malgré <code>.focusable()</code>, ou le bouton Play/Pause de la télécommande simulateur ne déclenche rien ? Ce sont exactement les deux points signalés comme non garantis dans cette leçon — reviens avec ce que tu observes plutôt que de deviner un correctif supplémentaire.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0033-tvos-lecteur-ecran-dedie.html">← Leçon 33 : le lecteur plein écran quitte la modale</a></span>
+    <span>Leçon suivante : à venir</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
