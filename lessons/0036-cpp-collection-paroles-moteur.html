@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 36 — Le moteur C++ reçoit les paroles</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 36 · Interop Swift/C++ (2/N)</p>
+  <h1>Envoyer les paroles horodatées au moteur C++</h1>
+  <p class="subtitle">La Leçon 35 a prouvé le mécanisme avec un entier bidon. Cette leçon fait traverser la frontière à quelque chose de réel : la collection de paroles horodatées que <code>LyricsMapper</code> calcule déjà côté Swift (découpage des lignes, calcul des intervalles — <strong>inchangé</strong>, cette logique reste en Swift). Objectif unique : que cette collection arrive intacte côté C++, stockée dans une structure que le futur moteur graphique pourra consulter. Toujours aucun rendu — la surface Metal et le premier pixel affiché viendront dans une leçon dédiée.</p>
+
+  <h2>Ce qui existe déjà, ce qui change</h2>
+  <p><code>LyricsMapper.map(rawText:duration:) -> [LyricsLine]</code> (Leçon 28) produit un tableau de <code>LyricsLine</code> — <code>id: UUID</code>, <code>time: TimeInterval</code>, <code>text: String</code>. <code>FullScreenPlayerViewModel.loadLyrics()</code> l'obtient déjà, via <code>CachedLyricsRepository</code>, et l'affiche avec <code>LyricsView</code> (SwiftUI pur). Cette leçon ne touche à aucun de ces deux comportements : <code>LyricsView</code> continue d'afficher les paroles exactement comme avant. Elle ajoute un second chemin, en parallèle — la même collection part aussi vers un objet C++ qui la garde en mémoire, préparant le terrain pour la leçon où ce chemin C++ remplacera <code>LyricsView</code>.</p>
+
+  <h2>Le piège : une <code>String</code> Swift ne devient pas un <code>std::string</code> toute seule</h2>
+  <p>Point vérifié précisément avant d'écrire quoi que ce soit, parce que la documentation officielle prête à confusion sur ce point exact. Elle montre ceci comme fonctionnant "normalement" :</p>
+  <pre><code>// Doc officielle swift.org — fonctionne, mais pas pour la raison qu'on croit
+void printWelcomeMessage(const std::string &name);</code></pre>
+  <pre><code>printWelcomeMessage("Thomas")   // ✅ compile</code></pre>
+  <p>Ça compile — mais pas parce que Swift convertit une <code>String</code> en <code>std::string</code> automatiquement. C'est parce que <code>"Thomas"</code> est un <em>littéral</em>, et que <code>std::string</code> est rendu conforme à <code>ExpressibleByStringLiteral</code> côté Swift. Dès qu'on remplace le littéral par une variable, ça ne compile plus :</p>
+  <pre><code>let songTitle = song.title
+printWelcomeMessage(songTitle)   // ❌ ne compile pas</code></pre>
+  <blockquote>"cannot convert value of type 'String' to expected argument type 'std.__1.string'"</blockquote>
+  <p>Confirmé dans le code source de la bibliothèque standard Swift : le seul chemin d'une <code>String</code> vers un <code>std::string</code> est un initialiseur explicite, <code>std.string(_:)</code> — <em>"Swift does not convert C++ <code>std::string</code> type to Swift's <code>String</code> type automatically."</em> Le cast est obligatoire, partout, y compris pour construire un champ <code>std::string</code> d'un struct C++ depuis Swift :</p>
+  <pre><code>printWelcomeMessage(std.string(songTitle))   // ✅ compile</code></pre>
+
+  <h2>La structure côté C++ : <code>LyricsStore</code>, un objet qui accumule</h2>
+  <p>Question posée avant d'écrire le header : comment faire arriver <em>plusieurs</em> lignes côté C++ ? Deux approches existent techniquement — Swift construit lui-même un <code>std::vector</code> et le passe en un seul appel, ou Swift appelle une fonction C++ une fois par ligne et laisse le <code>std::vector</code> entièrement du côté C++. La seconde est retenue ici, pour une raison précise : c'est la seule dont chaque mécanisme est documenté noir sur blanc par swift.org (constructeurs → initialiseurs Swift, fonctions membres non-<code>const</code> → méthodes <code>mutating</code>, <code>std.string(_:)</code>) — construire un <code>std::vector</code> depuis Swift fonctionne aussi (`push_back(_:)`, testé dans la suite de tests officielle de Swift), mais ne fait l'objet d'aucune section du guide officiel, et la documentation prévient explicitement que Swift recopie profondément un conteneur C++ à chaque usage. Éviter cette zone grise pour l'instant.</p>
+  <pre><code>// NOUVEAU — Engine/LyricsStore.hpp
+#pragma once
+#include &lt;string&gt;
+#include &lt;vector&gt;
+#include &lt;cstddef&gt;
+
+namespace karamock {
+
+struct LyricLine {
+    double time;
+    std::string text;
+};
+
+class LyricsStore {
+public:
+    LyricsStore() = default;
+
+    void reserve(std::size_t count);
+    void addLine(double time, const std::string& text);
+    void clear();
+
+    std::size_t lineCount() const;
+    double timeAt(std::size_t index) const;
+
+private:
+    std::vector&lt;LyricLine&gt; lines_;
+};
+
+} // namespace karamock</code></pre>
+  <pre><code>// NOUVEAU — Engine/LyricsStore.cpp
+#include "LyricsStore.hpp"
+
+namespace karamock {
+
+void LyricsStore::reserve(std::size_t count) {
+    lines_.reserve(count);
+}
+
+void LyricsStore::addLine(double time, const std::string& text) {
+    lines_.push_back(LyricLine{time, text});
+}
+
+void LyricsStore::clear() {
+    lines_.clear();
+}
+
+std::size_t LyricsStore::lineCount() const {
+    return lines_.size();
+}
+
+double LyricsStore::timeAt(std::size_t index) const {
+    return lines_[index].time;
+}
+
+} // namespace karamock</code></pre>
+  <p><code>namespace karamock</code> : premher type C++ un peu conséquent du projet — la Leçon 35 n'avait qu'une fonction globale. Ce n'est pas indispensable techniquement, mais évite une renomination plus tard quand un deuxième type C++ (le moteur de rendu) arrivera. <code>const std::string&amp;</code> plutôt que <code>std::string</code> en paramètre d'<code>addLine</code> : évite une copie superflue à l'appel — le <code>push_back</code> interne en fera une de toute façon pour peupler le vector.</p>
+  <p>Dans Xcode : clic droit sur le groupe <code>Engine</code> → <em>Add Files to "Karamock"...</em> → sélectionne les deux nouveaux fichiers. Le bridging header pointe maintenant vers <code>LyricsStore.hpp</code> à la place de l'ancien fichier de preuve :</p>
+  <pre><code>// Karamock-Bridging-Header.h
+#include "Engine/LyricsStore.hpp"</code></pre>
+
+  <h2>L'appel depuis Swift : <code>var</code>, pas <code>let</code></h2>
+  <p><code>import CxxStdlib</code> est nécessaire pour obtenir <code>std.string</code> côté Swift. Le type C++ <code>LyricsStore</code> est importé comme une <em>value type</em> (un struct Swift) — ses méthodes non-<code>const</code> (<code>reserve</code>, <code>addLine</code>, <code>clear</code>) deviennent des méthodes <code>mutating</code>, donc la propriété qui le porte doit être <code>var</code> :</p>
+  <pre><code>// CORRECTION — ViewModels/FullScreenPlayerViewModel.swift
+import Foundation
+import CxxStdlib
+
+@MainActor
+@Observable
+final class FullScreenPlayerViewModel {
+    private(set) var lyrics: [LyricsLine] = placeholderLyrics
+    private var lyricsStore = karamock.LyricsStore()
+
+    private let song: Song
+    private let fetchLyrics: FetchLyricsUseCase
+
+    init(song: Song, fetchLyrics: FetchLyricsUseCase) {
+        self.song = song
+        self.fetchLyrics = fetchLyrics
+    }
+
+    func loadLyrics() async {
+        do throws(LyricsError) {
+            lyrics = try await fetchLyrics(for: song)
+        } catch {
+            switch error {
+            case .notFound:
+                lyrics = [LyricsLine(time: 0, text: "Paroles indisponibles pour cette chanson.")]
+            case .network:
+                lyrics = [LyricsLine(time: 0, text: "Connexion impossible. Réessayez")]
+            case .invalidURL, .malformedResponse:
+                lyrics = [LyricsLine(time: 0, text: "Paroles indisponibles pour le moment.")]
+            }
+        }
+        sendLyricsToEngine()
+    }
+
+    private func sendLyricsToEngine() {
+        lyricsStore.clear()
+        lyricsStore.reserve(lyrics.count)
+        for line in lyrics {
+            lyricsStore.addLine(line.time, std.string(line.text))
+        }
+        assert(lyricsStore.lineCount() == lyrics.count)
+    }
+}</code></pre>
+  <p><code>sendLyricsToEngine()</code> est appelée après le <code>do/catch</code>, pas seulement dans la branche réussie : même les messages de repli à une seule ligne ("Paroles indisponibles...") doivent atteindre le moteur, pour rester cohérent avec ce que <code>LyricsView</code> affiche déjà. L'<code>assert</code> ne coûte rien en release (retiré à la compilation) et confirme, en debug, que rien n'a été perdu dans la traversée.</p>
+
+  <details class="aside">
+    <summary>Un piège pour plus tard : <code>std::string</code> compte des octets, pas des caractères</summary>
+    <p>Vérifié dans la suite de tests officielle de Swift : l'encodage est garanti UTF-8 et l'aller-retour <code>String</code> → <code>std::string</code> → <code>String</code> ne perd rien. Mais <code>size()</code> compte des <strong>octets</strong>, pas des caractères — "Éloignés" fait 9 caractères mais 10 octets en UTF-8, à cause du "É". Sans conséquence pour cette leçon, qui ne fait que stocker et compter des lignes entières. Ça deviendra un vrai piège le jour où le moteur de rendu devra découper une ligne caractère par caractère pour l'effet de surlignage karaoké (<code>s.substr(...)</code> couperait au milieu d'un caractère accentué) — à garder en tête pour cette leçon-là, pas à résoudre maintenant.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Sendable et Swift 6 : non documenté par Apple pour l'interop C++</summary>
+    <p>Recherche menée avant d'écrire cette leçon : ni le guide officiel swift.org sur l'interop C++, ni la session WWDC25 "Safely mix C, C++, and Swift" ne mentionnent <code>Sendable</code>, la concurrence ou l'isolation d'acteur. Un type C++ importé n'est <strong>pas</strong> <code>Sendable</code> par défaut. Tant que <code>lyricsStore</code> reste une propriété privée d'un ViewModel <code>@MainActor</code>, utilisée uniquement de façon synchrone comme ici, aucune erreur Swift 6 ne se déclenche. Le jour où le moteur de rendu (Metal) devra être touché depuis un autre contexte, il existe une macro non documentée sur swift.org mais livrée dans la toolchain depuis Swift 6.0 (<code>SWIFT_UNCHECKED_SENDABLE</code>, dans <code>&lt;swift/bridging&gt;</code>) — à vérifier empiriquement à ce moment-là, pas une garantie à enseigner aujourd'hui.</p>
+  </details>
+
+  <details class="aside">
+    <summary>Pourquoi <code>LyricsStore</code> reste une value type, pour l'instant</summary>
+    <p>Sans annotation particulière côté C++, une classe C++ importée devient un struct Swift — copiée, pas partagée par référence. C'est sans conséquence ici : <code>lyricsStore</code> reste toujours la même propriété du même ViewModel, jamais copiée ailleurs. Ça cessera d'être vrai le jour où le moteur devra être partagé entre le ViewModel et une vue Metal qui le pilote en parallèle — swift.org documente une annotation dédiée pour ce cas (<code>SWIFT_SHARED_REFERENCE</code>, "Mapping C++ Types to Swift Reference Types"). Changement d'architecture à assumer explicitement dans une leçon future, pas un défaut à corriger aujourd'hui.</p>
+  </details>
+
+  <h2>Nettoyage : la preuve de la Leçon 35 a fait son travail</h2>
+  <p><code>LyricsTimingCheck.hpp</code>/<code>.cpp</code> n'avaient qu'un rôle : prouver que le mécanisme d'interop fonctionnait. C'est fait, et <code>LyricsStore</code> le prouve à nouveau avec du code réel — les deux fichiers de preuve, et la ligne temporaire dans <code>DiscoveryView.swift</code> qui les appelait, disparaissent :</p>
+  <pre><code>// CORRECTION — Views/Discovery/DiscoveryView.swift
+struct DiscoveryView: View {
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    PlaylistSection(playlists: mockPlaylist)
+                }
+                .padding(.top)
+            }
+            .navigationTitle("Découvrir")
+            .navigationDestination(for: Playlist.self) { playlist in
+                PlaylistDetailView(playlist: playlist)
+            }
+        }
+    }
+}</code></pre>
+  <p>Dans Xcode : sélectionne <code>LyricsTimingCheck.hpp</code> et <code>LyricsTimingCheck.cpp</code> dans le groupe <code>Engine</code> → <em>Delete</em> → <em>Move to Trash</em> (pas seulement "Remove Reference", pour ne pas laisser les fichiers traîner sur le disque).</p>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build (⌘B) sur un simulateur iPhone <strong>et</strong> un simulateur Apple TV : les deux doivent réussir. <code>LyricsTimingCheck.hpp</code>/<code>.cpp</code> ne doivent plus exister dans le projet.</li>
+      <li>Vérifie que <code>DiscoveryView.swift</code> ne contient plus la ligne <code>Text("C++ check: ...")</code>.</li>
+      <li>Lance l'app, ouvre une chanson, ouvre le lecteur plein écran : <code>LyricsView</code> affiche les paroles exactement comme avant cette leçon — aucun changement visuel attendu.</li>
+      <li>Place un breakpoint dans <code>sendLyricsToEngine()</code>, juste après la boucle : inspecte <code>lyricsStore.lineCount()</code> dans le debugger, vérifie qu'il correspond au nombre de lignes de <code>lyrics</code>.</li>
+      <li>Force le cas d'erreur (coupe le réseau, ou passe temporairement une URL invalide dans le service de lyrics) : vérifie que le message de repli à une ligne atteint bien aussi <code>lyricsStore</code> (breakpoint toujours actif, <code>lineCount() == 1</code>).</li>
+      <li>Teste une chanson dont le titre ou les paroles contiennent des accents : vérifie qu'aucun crash ni assertion ne se déclenche — le passage par <code>std.string(_:)</code> doit rester silencieux et correct.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>LyricsTimingCheck.hpp</code>/<code>.cpp</code> : preuve minimale, un entier</td><td>Supprimés — leur rôle est rempli</td></tr>
+    <tr><td>Aucune structure C++ ne stocke de données réelles</td><td><code>karamock::LyricsStore</code>, un <code>std::vector&lt;LyricLine&gt;</code> entièrement côté C++</td></tr>
+    <tr><td><code>FullScreenPlayerViewModel</code> ne connaît que <code>LyricsView</code> comme consommateur des paroles</td><td>Un second chemin, silencieux, envoie la même collection vers <code>lyricsStore</code></td></tr>
+    <tr><td>Aucun appel <code>std.string(_:)</code> dans le projet</td><td>Cast explicite systématique — la seule voie documentée entre <code>String</code> et <code>std::string</code></td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://www.swift.org/documentation/cxx-interop/">Swift.org — "Mixing Swift and C++"</a> — sections "Using std::string" et "Recommended Approach for Using C++ Containers".<br>
+    <a href="https://www.swift.org/documentation/cxx-interop/status/">Swift.org — "Supported Features and Constraints of C++ Interoperability"</a>.<br>
+    <a href="https://github.com/swiftlang/swift/blob/release/6.2/stdlib/public/Cxx/std/String.swift">swiftlang/swift — stdlib/public/Cxx/std/String.swift</a> — preuve que la conversion <code>String → std.string</code> n'est jamais implicite.<br>
+    <a href="https://github.com/swiftlang/swift/blob/release/6.2/stdlib/public/Cxx/CxxVector.swift">swiftlang/swift — stdlib/public/Cxx/CxxVector.swift</a> — protocole <code>CxxVector</code>, méthode <code>push_back(_:)</code> côté Swift.<br>
+    <a href="https://github.com/swiftlang/swift/blob/release/6.2/test/Interop/Cxx/stdlib/use-std-string.swift">swiftlang/swift — test/Interop/Cxx/stdlib/use-std-string.swift</a> — comportement UTF-8 vérifié (octets vs caractères).<br>
+    <a href="https://developer.apple.com/videos/play/wwdc2025/311/">WWDC25 — "Safely mix C, C++, and Swift"</a> — aucune mention de Sendable/concurrence, confirmé par lecture du script complet.<br>
+    <a href="https://forums.swift.org/t/using-a-c-function-that-takes-a-string-from-swift-from-inside-a-swift-package/66732">Swift Forums — erreur de compilation réelle sur la conversion implicite manquante</a>.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">1. Pourquoi <code>printWelcomeMessage("Thomas")</code> compile-t-il alors que <code>printWelcomeMessage(songTitle)</code> (une variable String) ne compile pas ?</p>
+    <label><input type="radio" name="q1" value="a"> Swift convertit automatiquement les variables String courtes, pas les plus longues</label>
+    <label><input type="radio" name="q1" value="b"> "Thomas" est un littéral, rendu conforme à ExpressibleByStringLiteral pour std::string — ce n'est pas une conversion générale de String</label>
+    <label><input type="radio" name="q1" value="c"> Parce que printWelcomeMessage est surchargée deux fois, une par type</label>
+    <label><input type="radio" name="q1" value="d"> Parce que "Thomas" ne contient aucun caractère accentué</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">2. Pourquoi cette leçon fait-elle appeler à Swift une fonction C++ une fois par ligne (addLine), plutôt que de construire tout le std::vector côté Swift avant de l'envoyer en un seul appel ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce que construire un std::vector depuis Swift est techniquement impossible</label>
+    <label><input type="radio" name="q2" value="b"> Parce que std::vector ne peut pas contenir de std::string</label>
+    <label><input type="radio" name="q2" value="c"> Parce que chaque mécanisme utilisé (constructeurs, méthodes mutating, cast de String) est documenté noir sur blanc par swift.org, contrairement à la construction d'un vector côté Swift</label>
+    <label><input type="radio" name="q2" value="d"> Parce que LyricLine ne peut pas être copié en C++</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi <code>lyricsStore</code> doit-il être déclaré <code>var</code> et non <code>let</code> dans FullScreenPlayerViewModel ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que ses méthodes non-const (reserve, addLine, clear) deviennent des méthodes mutating côté Swift, ce qui exige une propriété modifiable</label>
+    <label><input type="radio" name="q3" value="b"> Parce que tout type C++ importé est obligatoirement var en Swift</label>
+    <label><input type="radio" name="q3" value="c"> Parce que @Observable interdit les propriétés let</label>
+    <label><input type="radio" name="q3" value="d"> Parce que lineCount() modifie l'état interne du store</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">4. Que se passe-t-il concrètement si on écrit <code>lyricsStore.addLine(line.time, line.text)</code> sans le cast <code>std.string(_:)</code> ?</p>
+    <label><input type="radio" name="q4" value="a"> Ça compile, mais le texte est tronqué au premier caractère non-ASCII</label>
+    <label><input type="radio" name="q4" value="b"> Ça compile, avec une conversion implicite silencieuse au runtime</label>
+    <label><input type="radio" name="q4" value="c"> Ça compile seulement si le texte ne contient que des caractères ASCII</label>
+    <label><input type="radio" name="q4" value="d"> Ça ne compile pas du tout — String ne se convertit jamais implicitement en std::string, ni en paramètre ni en champ de struct</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">5. Pourquoi <code>sendLyricsToEngine()</code> est-elle appelée après le do/catch de loadLyrics(), et non seulement dans le cas de succès ?</p>
+    <label><input type="radio" name="q5" value="a"> Parce que le compilateur l'exige pour les fonctions throws(LyricsError)</label>
+    <label><input type="radio" name="q5" value="b"> Parce que sinon assert(lyricsStore.lineCount() == lyrics.count) ne compilerait pas</label>
+    <label><input type="radio" name="q5" value="c"> Pour que même les messages de repli affichés en cas d'erreur atteignent le moteur, cohérent avec ce que LyricsView affiche déjà dans ce cas</label>
+    <label><input type="radio" name="q5" value="d"> Parce que catch ne peut pas contenir d'appel à une méthode mutating</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">6. D'après la recherche menée pour cette leçon, que dit précisément la documentation Apple sur Sendable et les types C++ importés dans ce contexte ?</p>
+    <label><input type="radio" name="q6" value="a"> Que tout type C++ importé est automatiquement Sendable depuis Swift 6.0</label>
+    <label><input type="radio" name="q6" value="b"> Rien — ni le guide officiel swift.org ni la session WWDC25 sur la sûreté C/C++/Swift ne mentionnent Sendable, la concurrence ou l'isolation dans ce contexte</label>
+    <label><input type="radio" name="q6" value="c"> Que Sendable est obligatoire pour tout type utilisé dans un ViewModel @Observable</label>
+    <label><input type="radio" name="q6" value="d"> Que SWIFT_UNCHECKED_SENDABLE est requis dès le premier appel C++ depuis Swift</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">7. Pourquoi <code>LyricsTimingCheck.hpp</code>/<code>.cpp</code> sont-ils supprimés dans cette leçon plutôt que laissés de côté ?</p>
+    <label><input type="radio" name="q7" value="a"> Leur seul rôle était de prouver que le mécanisme d'interop fonctionnait (Leçon 35) — LyricsStore le prouve à nouveau, avec du code qui sert réellement à l'app</label>
+    <label><input type="radio" name="q7" value="b"> Parce qu'ils empêchent techniquement la compilation de LyricsStore.hpp</label>
+    <label><input type="radio" name="q7" value="c"> Parce qu'Xcode limite à un seul fichier .cpp par groupe</label>
+    <label><input type="radio" name="q7" value="d"> Parce que le bridging header ne peut inclure qu'un seul fichier .hpp à la fois</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">L'assert dans sendLyricsToEngine() se déclenche (lineCount() différent de lyrics.count) ? Vérifie d'abord que clear() est bien appelé avant la boucle — sans lui, un second appel à loadLyrics() (par exemple après une erreur réseau suivie d'un succès) accumule les lignes au lieu de les remplacer. Pose la question avec la trace du debugger si le compte reste faux même après vérification.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0035-cpp-interop-mecanisme.html">← Leçon 35 : ajouter du C++ à Karamock, le mécanisme</a></span>
+    <span>Leçon suivante : à venir (le canvas Metal, via metal-cpp)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
