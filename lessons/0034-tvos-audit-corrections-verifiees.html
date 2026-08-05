@@ -10,22 +10,22 @@
 
   <p class="lesson-kicker">Leçon 34 · Multi-plateforme (4/N)</p>
   <h1>Un audit tvOS passé au crible : ce qu'on corrige, ce qu'on refuse</h1>
-  <p class="subtitle">Un audit externe (<code>audits/2026-08-02-tvos-audit.md</code>, 3 agents Copilot spécialisés, note globale 4.2/10) a listé 22 problèmes sur Karamock tvOS. Avant d'en corriger un seul, chaque remarque a été vérifiée contre la doc Apple officielle et contre le code réel — deux des six problèmes "critiques" se sont révélés factuellement faux, un troisième proposait d'annuler le correctif de la Leçon 33. Cette leçon applique les corrections qui ont survécu à la vérification, et documente pourquoi les autres sont refusées.</p>
+  <p class="subtitle">Un audit externe (<code>audits/2026-08-02-tvos-audit.md</code>, note globale 4,2/10) a listé 22 problèmes sur Karamock tvOS. Avant d'en corriger un seul, chaque remarque a été vérifiée contre la doc Apple officielle et contre le code réel — quatre des six problèmes "critiques" se sont révélés factuellement faux, et une autre recommandation aurait annulé le correctif de la Leçon 33. Cette leçon applique les corrections qui ont survécu à la vérification, et documente pourquoi les autres sont refusées.</p>
 
-  <h2>Le audit, réévalué : 4 sous-agents spécialistes, verdict par verdict</h2>
+  <h2>L'audit, réévalué : verdict par verdict</h2>
   <table class="compare-table">
     <tr><th>Remarque de l'audit</th><th>Verdict vérifié</th></tr>
-    <tr><td>C1 — <code>.sheet()</code> "ignoré silencieusement sur tvOS"</td><td>🟡 Contredit par le HIG ("a sheet is always modal" sur tvOS — elle s'affiche, juste toujours en plein modal). À confirmer sur device pour le cas précis <code>.sheet(item:)</code> déclenché depuis une liste.</td></tr>
+    <tr><td>C1 — <code>.sheet()</code> "ignoré silencieusement sur tvOS"</td><td>🟡 Contredit par le HIG ("a sheet is always modal" sur tvOS, c'est-à-dire qu'une sheet reste toujours modale — elle s'affiche, mais toujours de façon strictement modale). À confirmer sur device pour le cas précis <code>.sheet(item:)</code> déclenché depuis une liste.</td></tr>
     <tr><td>C2 — <code>NavigationStack</code> imbriqués = "comportement indéfini, plante"</td><td>🔴 Faux tel que formulé. La doc ne traite simplement pas ce cas — et c'est la structure qui tourne depuis la Leçon 33, sans plantage rapporté.</td></tr>
     <tr><td>C4 — <code>MiniPlayerBar.swift</code> "compile error sur tvOS (API iOS 18+)"</td><td>🔴 Faux. <code>tabViewBottomAccessoryPlacement</code> est tvOS 26.0+ — disponible sur les deux plateformes, en même temps.</td></tr>
     <tr><td>C5 — <code>.borderedProminent</code>/<code>.bordered</code> "n'existent pas sur tvOS"</td><td>🔴 Faux. Confirmés tvOS 15.0+ et 13.0+ respectivement, doc officielle à l'appui.</td></tr>
-    <tr><td>I1/M1/M5 — <code>.buttonStyle(.plain)</code> "supprime le halo de focus"</td><td>🔴 Faux. La doc de <code>PlainButtonStyle</code> dit elle-même qu'il "peut appliquer un effet visuel pour indiquer... l'état focus" — il retire le chrome au repos, pas le focus.</td></tr>
+    <tr><td>I1/M1/M5 — <code>.buttonStyle(.plain)</code> "supprime le halo de focus"</td><td>🔴 Faux. La doc de <code>PlainButtonStyle</code> dit elle-même qu'il "peut appliquer un effet visuel pour indiquer... l'état focus" — il retire l'habillage visuel au repos, pas l'indication de focus.</td></tr>
     <tr><td>I3 — Revenir à <code>fullScreenCover</code> + <code>persistentSystemOverlays</code></td><td>🔴 À rejeter. Réintroduirait probablement le bug corrigé en Leçon 33 ; <code>persistentSystemOverlays</code> ne documente aucun effet pertinent sur tvOS.</td></tr>
     <tr><td>C3 — <code>.onPlayPauseCommand()</code> absent</td><td>✅ Confirmé, réel, tvOS 13+ exclusif.</td></tr>
     <tr><td>I10 — <code>.focusSection()</code> manquant sur l'overlay mini-lecteur</td><td>✅ Confirmé, tvOS 15+, peu coûteux.</td></tr>
     <tr><td>I4 — Labels de temps "0:00" figés</td><td>✅ Confirmé en lisant le fichier — mais pas spécifique à tvOS (identique sur iOS).</td></tr>
-    <tr><td>C6/I9 — Boutons précédent/suivant vides, <code>PlayerState</code> à enrichir</td><td>✅ Vrai, mais hors périmètre : pas un bug tvOS, et enrichir <code>PlayerState</code> (playlist, index) est un chantier produit, pas un correctif de plateforme.</td></tr>
-    <tr><td>I7/I8/M2-M9 — Tailles, espacements, polices</td><td>✅ Tous vérifiés exacts dans le code, cohérents avec les conventions tvOS 10 pieds.</td></tr>
+    <tr><td>C6/I9 — Boutons précédent/suivant vides, <code>PlayerState</code> à enrichir</td><td>✅ Vrai, mais hors périmètre : pas un bug tvOS, et enrichir <code>PlayerState</code> (playlist, index) relève d'une nouvelle fonctionnalité, pas d'un correctif de plateforme.</td></tr>
+    <tr><td>I7/I8/M2-M9 — Tailles, espacements, polices</td><td>✅ Tous vérifiés exacts dans le code, cohérents avec les conventions d'interface tvOS, conçues pour être lues à environ trois mètres de distance.</td></tr>
   </table>
 
   <details class="aside">
@@ -36,11 +36,11 @@
   <h2>Corrections adoptées</h2>
 
   <div class="mission-tie">
-    <strong>État réel de l'implémentation (comparé le 2026-08-03, mis à jour après la Leçon 35) :</strong> 7 des 10 correctifs ci-dessous sont déjà appliqués par Nicolas — <code>.onPlayPauseCommand</code> (les deux fichiers), <code>.focusSection()</code>, les labels de temps, les tailles <code>PlaylistCard</code>/<code>SongRow</code>/<code>SongHeader</code>, l'espacement de <code>SongOptionsForm</code>, <code>StretchyView</code>, et <code>.refreshable</code>. Trois ne le sont pas encore, par simple omission — le code enseigné plus bas reste correct, juste pas encore recopié dans le projet : les labels d'accessibilité paramétrés et l'agrandissement des boutons de <code>FocusStepperTV</code> (section 4), la hauteur tvOS de <code>PlaylistCoverHeader</code> (section 5, dernière ligne du tableau), et <code>.focusable()</code> sur <code>LyricsView</code> (aside en fin de section). Un vrai correctif restait nécessaire dans le contenu ci-dessous : le code <code>.onPlayPauseCommand</code> de la section 1 manquait une garde <code>#if os(tvOS)</code>, ce qui cassait la compilation iOS — repéré et corrigé par Nicolas pendant la Leçon 35 (build croisé iOS/tvOS), et corrigé ici en conséquence.
+    <strong>État réel de l'implémentation (comparé le 3 août 2026, mis à jour après la Leçon 35) :</strong> 7 des 10 correctifs ci-dessous sont déjà appliqués par Nicolas — <code>.onPlayPauseCommand</code> (les deux fichiers), <code>.focusSection()</code>, les labels de temps, les tailles <code>PlaylistCard</code>/<code>SongRow</code>/<code>SongHeader</code>, l'espacement de <code>SongOptionsForm</code>, <code>StretchyView</code>, et <code>.refreshable</code>. Trois manquent encore, par simple omission : le code enseigné plus bas reste correct, il n'a simplement pas encore été recopié dans le projet — les labels d'accessibilité paramétrés et l'agrandissement des boutons de <code>FocusStepperTV</code> (section 4), la hauteur tvOS de <code>PlaylistCoverHeader</code> (section 5, dernière ligne du tableau), et <code>.focusable()</code> sur <code>LyricsView</code> (aside en fin de section). Correction apportée à cette leçon le 3 août 2026 : le code <code>.onPlayPauseCommand</code> de la section 1 manquait la garde <code>#if os(tvOS)</code>, ce qui cassait la compilation iOS — repéré par Nicolas pendant la Leçon 35 (dont le scénario de vérification impose un build iOS <strong>et</strong> tvOS), et corrigé ici en conséquence.
   </div>
 
   <h3>1. Télécommande Siri Remote — <code>.onPlayPauseCommand</code></h3>
-  <p>Vrai manque confirmé : aucun handler pour le bouton physique Play/Pause. Point notable au-delà du simple "il en manque un" : c'est une commande télécommande <em>globale</em>, pas un second <code>Button</code> focusable — elle donne à <code>MiniPlayerBarTV</code> un contrôle play/pause sans violer la règle "un seul élément focusable par composant" décidée en Leçon 32 (c'est précisément pour cette raison que <code>MiniPlayerBarTV</code> n'avait pas de bouton play/pause dédié jusqu'ici).</p>
+  <p>Vrai manque confirmé : aucun gestionnaire pour le bouton physique Play/Pause. Point notable au-delà du simple "il en manque un" : c'est une commande globale de la télécommande, pas un second <code>Button</code> capable de recevoir le focus — elle donne à <code>MiniPlayerBarTV</code> un contrôle play/pause sans violer la règle "un seul élément focusable par composant" décidée en Leçon 32 (c'est précisément pour cette raison que <code>MiniPlayerBarTV</code> n'avait pas de bouton play/pause dédié jusqu'ici).</p>
   <pre><code>// FullScreenPlayerView.swift — sur le VStack principal
 .padding()
 #if os(tvOS)
@@ -52,7 +52,7 @@
 #if os(tvOS)
 .onPlayPauseCommand { player.isPlaying.toggle() }
 #endif</code></pre>
-  <p><strong>Correction (2026-08-03) :</strong> le code enseigné ici manquait à l'origine la garde <code>#if os(tvOS)</code>. Comme <code>FullScreenPlayerView.swift</code> et <code>MiniPlayerBarTV.swift</code> compilent pour les deux destinations (mécanisme de la Leçon 31, pas de séparation de target), un appel <code>.onPlayPauseCommand</code> non gardé — API tvOS 13+ exclusive — casse la compilation côté iOS. Ce n'était pas visible tant que seule la destination tvOS était buildée ; le bug a été repéré et corrigé par Nicolas pendant la Leçon 35, à l'étape de son scénario de vérification qui impose un build iOS <strong>et</strong> tvOS.</p>
+  <p><strong>Correction (3 août 2026) :</strong> le code enseigné ici manquait à l'origine la garde <code>#if os(tvOS)</code>. Comme <code>FullScreenPlayerView.swift</code> et <code>MiniPlayerBarTV.swift</code> compilent pour les deux destinations (mécanisme de la Leçon 31, pas de séparation de target), un appel <code>.onPlayPauseCommand</code> non gardé — API tvOS 13+ exclusive — casse la compilation côté iOS. Ce n'était pas visible tant que seule la destination tvOS était buildée ; le bug a été repéré et corrigé par Nicolas pendant la Leçon 35, à l'étape de son scénario de vérification qui impose un build iOS <strong>et</strong> tvOS.</p>
 
   <h3>2. Focus Engine — <code>.focusSection()</code> sur l'overlay mini-lecteur</h3>
   <p>Confirmé tvOS 15+ : guide le Focus Engine pour qu'il atteigne correctement une zone d'overlay (comme <code>MiniPlayerBarTV</code>, posée par-dessus le <code>TabView</code> plutôt qu'intégrée à sa hiérarchie normale).</p>
@@ -78,7 +78,7 @@ HStack {
 .foregroundStyle(.secondary)</code></pre>
 
   <h3>4. Labels d'accessibilité de <code>FocusStepperTV</code> — paramétrés, pas codés en dur</h3>
-  <p>L'audit proposait de remplacer "Diminuer"/"Augmenter" par "Reculer de 10s"/"Avancer de 10s" (M6) — un correctif faux par excès de généralisation : <code>FocusStepperTV</code> est un composant partagé entre trois contextes (tonalité, tempo, progression), et "reculer de 10s" n'a aucun sens pour un réglage de tonalité. Le vrai correctif est de paramétrer les labels, pas de les figer sur un seul usage :</p>
+  <p>L'audit proposait de remplacer "Diminuer"/"Augmenter" par "Reculer de 10s"/"Avancer de 10s" (M6) — un correctif erroné, parce qu'il applique à tous les usages un libellé qui n'en concerne qu'un : <code>FocusStepperTV</code> est un composant partagé entre trois contextes (tonalité, tempo, progression), et "reculer de 10s" n'a aucun sens pour un réglage de tonalité. Le vrai correctif est de paramétrer les labels, pas de les figer sur un seul usage :</p>
   <pre><code>// FocusStepperTV.swift
 struct FocusStepperTV: View {
     let onDecrement: () -> Void
@@ -120,9 +120,9 @@ FocusStepperTV(
     decrementLabel: "Reculer de 10 secondes",
     incrementLabel: "Avancer de 10 secondes"
 )</code></pre>
-  <p>Sur la taille : l'audit suggérait <code>frame(width: 80, height: 80)</code> sur les boutons. Écarté au profit d'une police plus grande (<code>.system(size: 40)</code>) — ce sont des icônes SF Symbols sans fond ni bordure ; un <code>frame</code> invisible autour d'une petite icône ajoute de l'espace vide autour d'elle, une police plus grande agrandit réellement ce qui est visible à l'écran.</p>
+  <p>Sur la taille : l'audit suggérait <code>frame(width: 80, height: 80)</code> sur les boutons. Écarté au profit d'une police plus grande (<code>.system(size: 40)</code>) — ce sont des icônes SF Symbols sans fond ni bordure ; un <code>frame</code> invisible ne fait qu'ajouter du vide autour d'une petite icône, une police plus grande agrandit réellement ce qui est visible à l'écran.</p>
 
-  <h3>5. Tailles pour l'écran grand format (10 pieds)</h3>
+  <h3>5. Tailles adaptées à une lecture à distance (canapé/télé)</h3>
   <p>Toutes vérifiées exactes dans le code actuel — correctifs appliqués via <code>#if os(tvOS)</code>, sans toucher au rendu iOS :</p>
   <table class="compare-table">
     <tr><th>Fichier</th><th>iOS (inchangé)</th><th>tvOS (nouveau)</th></tr>
@@ -144,7 +144,7 @@ LinearGradient(colors: playlist.gradientColors, startPoint: .topLeading, endPoin
   <p>Même geste pour les cinq autres fichiers du tableau — un seul <code>#if os(tvOS)/#else</code> par valeur concernée, aucune restructuration.</p>
 
   <h3>6. <code>StretchyView</code> désactivée sur tvOS</h3>
-  <p>Le geste de scroll tvOS (surface tactile de la télécommande, discret) rend l'effet d'étirement peu pertinent — actuellement appliqué sans condition de plateforme :</p>
+  <p>Le défilement sur tvOS se fait par un geste discret sur la surface tactile de la télécommande, ce qui rend l'effet d'étirement peu pertinent — actuellement appliqué sans condition de plateforme :</p>
   <pre><code>// StretchyView.swift
 extension View {
     func stretchy() -> some View {
@@ -163,7 +163,7 @@ extension View {
 }</code></pre>
 
   <h3>7. <code>.refreshable</code> retiré sur tvOS</h3>
-  <p>Confirmé disponible tvOS 15+ (ne casse rien, contrairement à ce qu'aurait pu laisser croire une lecture rapide de l'audit) — mais sa doc officielle ne décrit le geste "tirer pour rafraîchir" que pour iOS/iPadOS. Sur tvOS, ce geste n'a pas d'équivalent télécommande : le modificateur ne fait rien de mal, il est juste mort. Retiré pour ne pas laisser du code qui ne peut jamais se déclencher :</p>
+  <p>Confirmé disponible tvOS 15+ (ne casse rien, contrairement à ce qu'aurait pu laisser croire une lecture rapide de l'audit) — mais sa doc officielle ne décrit le geste "tirer pour rafraîchir" que pour iOS/iPadOS. Sur tvOS, ce geste n'a pas d'équivalent à la télécommande : le modificateur ne casse rien, il est simplement inerte (du code mort). Retiré pour ne pas laisser du code qui ne peut jamais se déclencher :</p>
   <pre><code>// LibraryView.swift
 #if os(iOS)
 .refreshable { await viewModel.refresh() }

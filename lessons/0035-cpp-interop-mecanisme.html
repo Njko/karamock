@@ -10,11 +10,11 @@
 
   <p class="lesson-kicker">Leçon 35 · Interop Swift/C++ (1/N)</p>
   <h1>Ajouter du C++ à Karamock : le mécanisme, avant le moteur</h1>
-  <p class="subtitle">L'axe tvOS est clos (Leçons 31 à 34, trois correctifs mineurs mis de côté). Nouvel axe : un mini moteur de paroles en C++, intégré via l'interop Swift/C++. Cette leçon ne touche à aucune logique métier — pas encore à <code>LyricsMapper.swift</code> — elle prouve seulement que le mécanisme fonctionne : un appel C++ minimal qui compile et s'exécute depuis Swift, dans la target existante. Le vrai portage du timing simulé est la Leçon 36.</p>
+  <p class="subtitle">L'axe tvOS est clos (Leçons 31 à 34, trois correctifs mineurs mis de côté). Nouvel axe : un mini moteur de paroles en C++, intégré via l'interop Swift/C++. Cette leçon ne touche à aucune logique métier — pas encore à <code>LyricsMapper.swift</code> — elle prouve seulement que le mécanisme fonctionne : un appel C++ minimal qui compile et s'exécute depuis Swift, dans la cible existante. Le vrai portage du timing simulé est la Leçon 36.</p>
 
   <h2>Le mécanisme : C++ Interoperability Mode, pas un pont Objective-C++ à l'ancienne</h2>
-  <p>Karamock est aujourd'hui 100% Swift : aucun fichier <code>.cpp</code>/<code>.mm</code>, aucun bridging header. Le mode moderne pour mélanger Swift et C++ dans un même projet — <em>C++ Interoperability Mode</em> — est distinct de l'ancien pont via Objective-C++ : pas de fichier <code>.mm</code> intermédiaire à écrire, Swift peut appeler du C++ (presque) directement. Introduit avec <a href="https://www.swift.org/documentation/cxx-interop/project-build-setup/">Swift 5.9 / Xcode 15</a>, largement en dessous du plancher actuel du projet (<code>SWIFT_VERSION = 6.0</code>, Xcode 26).</p>
-  <p>Dans Xcode : sélectionne le projet → la target <code>Karamock</code> → onglet <em>Build Settings</em> → recherche "interoperability" → réglage <strong>"C++ and Objective-C Interoperability"</strong> → passe de "Objective-C" (valeur par défaut) à <strong>"C++/Objective-C++"</strong>. C'est la même bascule que documente <a href="https://www.swift.org/documentation/cxx-interop/project-build-setup/">la documentation officielle Swift.org</a> pour ce mécanisme.</p>
+  <p>Karamock est aujourd'hui 100% Swift : aucun fichier <code>.cpp</code>/<code>.mm</code>, aucun bridging header. Le mode moderne pour mélanger Swift et C++ dans un même projet — <em>C++ Interoperability Mode</em> — est distinct de l'ancien pont via Objective-C++ : pas de fichier <code>.mm</code> intermédiaire à écrire, Swift peut appeler du C++ (presque) directement. Introduit avec <a href="https://www.swift.org/documentation/cxx-interop/project-build-setup/">Swift 5.9 / Xcode 15</a>, très en deçà de ce que le projet exige déjà (<code>SWIFT_VERSION = 6.0</code>, Xcode 26).</p>
+  <p>Dans Xcode : sélectionne le projet → la cible <code>Karamock</code> → onglet <em>Build Settings</em> → recherche "interoperability" → réglage <strong>"C++ and Objective-C Interoperability"</strong> → passe de "Objective-C" (valeur par défaut) à <strong>"C++/Objective-C++"</strong>. C'est exactement la bascule décrite par <a href="https://www.swift.org/documentation/cxx-interop/project-build-setup/">la documentation officielle de Swift.org</a> pour ce mécanisme.</p>
 
   <details class="aside">
     <summary>Un détail du projet qui prête à confusion : gnu++20 est déjà là</summary>
@@ -31,15 +31,15 @@ int lyricsTimingCheck(int value);</code></pre>
 int lyricsTimingCheck(int value) {
     return value + 1;
 }</code></pre>
-  <p>Volontairement trivial — une fonction pure sur un entier, sans <code>std::string</code> ni <code>std::vector</code>. La Leçon 36 s'attaquera au vrai signal ambigu (bridging de <code>String</code>/<code>std::string</code>) ; ici, l'objectif est uniquement de prouver que le compilateur accepte le C++ dans la target et que Swift peut l'appeler.</p>
+  <p>Volontairement trivial — une fonction toute simple qui prend un entier et en renvoie un autre, sans <code>std::string</code> ni <code>std::vector</code>. La Leçon 36 s'attaquera au vrai point délicat : la conversion entre <code>String</code> et <code>std::string</code> de part et d'autre de la frontière Swift/C++ ; ici, l'objectif est uniquement de prouver que le compilateur accepte le C++ dans la cible et que Swift peut l'appeler.</p>
 
-  <h2>Le pont vers Swift : pourquoi une target App a besoin d'un bridging header</h2>
+  <h2>Le pont vers Swift : pourquoi une cible App a besoin d'un bridging header</h2>
   <p>Point vérifié précisément, parce que la doc officielle distingue deux cas très différents :</p>
   <blockquote>"App targets must use a bridging header to make the target's C++ types and functions available to Swift code in the same App target."</blockquote>
-  <p>Une target <em>Framework</em> importe automatiquement le C++ déclaré dans ses headers publics — pas de bridging header nécessaire. Karamock est une target <strong>App</strong> (pas un framework), donc ce raccourci ne s'applique pas : il faut le même mécanisme qu'utilisait déjà le pont Objective-C historique, un bridging header, sauf qu'ici il pointe vers un header C++ au lieu d'un header Objective-C.</p>
+  <p>(autrement dit : une cible de type App doit obligatoirement passer par un bridging header pour rendre son C++ visible depuis Swift.) Une cible <em>Framework</em> importe automatiquement le C++ déclaré dans ses headers publics — pas de bridging header nécessaire. Karamock est une cible <strong>App</strong> (pas un framework), donc ce raccourci ne s'applique pas : il faut recourir au même mécanisme que l'ancien pont Objective-C, un bridging header, sauf qu'ici il pointe vers un header C++ au lieu d'un header Objective-C.</p>
   <pre><code>// Karamock-Bridging-Header.h
 #include "Engine/LyricsTimingCheck.hpp"</code></pre>
-  <p>Puis dans Xcode : <em>Build Settings</em> → <strong>"Objective-C Bridging Header"</strong> → chemin vers <code>Karamock-Bridging-Header.h</code>. Ce réglage (<code>SWIFT_OBJC_BRIDGING_HEADER</code>) existe depuis l'interop Objective-C classique — la Leçon 35 est la première fois que Karamock en a besoin, mais le mécanisme lui-même n'est pas nouveau.</p>
+  <p>Puis dans Xcode : <em>Build Settings</em> → <strong>"Objective-C Bridging Header"</strong> → chemin vers <code>Karamock-Bridging-Header.h</code>. Ce réglage (<code>SWIFT_OBJC_BRIDGING_HEADER</code>) existe depuis l'interop Objective-C classique — c'est la première fois que Karamock en a besoin, mais le mécanisme lui-même n'est pas nouveau.</p>
 
   <h2>Preuve minimale : un appel qui compile et s'exécute</h2>
   <p>Périmètre décidé pour cette leçon : un seul appel, temporaire, juste pour observer que ça fonctionne — pas une intégration dans l'UI définitive de Karamock.</p>
@@ -48,26 +48,26 @@ VStack(alignment: .leading, spacing: 24) {
     Text("C++ check: \(lyricsTimingCheck(41))")
     PlaylistSection(playlists: mockPlaylist)
 }</code></pre>
-  <p>Si le mécanisme fonctionne, l'app affiche "C++ check: 42" au lancement — <code>41</code> passé à une fonction C++ réelle, compilée dans la target, le résultat revenant intact côté Swift. Cette ligne n'a aucune vocation à rester : elle disparaît dès que la Leçon 36 remplace <code>LyricsTimingCheck</code> par le vrai portage de <code>LyricsMapper</code>.</p>
+  <p>Si le mécanisme fonctionne, l'app affiche "C++ check: 42" au lancement — <code>41</code> passé à une fonction C++ réelle, compilée dans la cible, le résultat revenant intact côté Swift. Cette ligne n'a aucune vocation à rester : elle disparaît dès que la Leçon 36 remplace <code>LyricsTimingCheck</code> par le vrai portage de <code>LyricsMapper</code>.</p>
 
   <div class="mission-tie">
     <strong>État réel de l'implémentation (comparé le 2026-08-03)</strong>
-    <p>Le mécanisme est bien en place et conforme à ce qu'enseigne cette leçon, avec deux écarts mineurs, corrigés ci-dessus : le groupe/dossier réellement créé s'appelle <code>Engine</code>, pas <code>CppEngine</code> comme initialement rédigé — la leçon citait un nom de convention personnelle, pas un nom imposé par Apple, donc corrigée pour suivre la réalité. La ligne de preuve dans <code>DiscoveryView.swift</code> est bien celle attendue, sans le <code>.font(.caption).foregroundStyle(.secondary)</code> initialement suggéré (détail cosmétique, sans incidence). Elle est toujours présente au moment de cette vérification : l'étape 8 du scénario ("retire la ligne une fois la preuve faite") n'a pas encore été appliquée — normal, elle sert justement à cette vérification. <code>SWIFT_OBJC_INTEROP_MODE = objcxx</code> et <code>SWIFT_OBJC_BRIDGING_HEADER</code> sont bien réglés dans <code>project.pbxproj</code>, dans les deux configurations de build, exactement comme enseigné.</p>
+    <p>Le mécanisme est bien en place et conforme à ce qu'enseigne cette leçon, avec deux écarts mineurs, corrigés ci-dessus : le groupe/dossier réellement créé s'appelle <code>Engine</code>, pas <code>CppEngine</code> comme initialement rédigé — la leçon citait un nom de convention personnelle, pas un nom imposé par Apple ; elle a donc été corrigée pour coller à la réalité. La ligne de preuve dans <code>DiscoveryView.swift</code> est bien celle attendue, sans le <code>.font(.caption).foregroundStyle(.secondary)</code> initialement suggéré (détail cosmétique, sans incidence). Cette ligne est toujours présente au moment de la vérification : l'étape 8 du scénario ("retire la ligne une fois la preuve faite") n'a pas encore été appliquée — c'est normal, la ligne sert précisément à cette vérification. <code>SWIFT_OBJC_INTEROP_MODE = objcxx</code> et <code>SWIFT_OBJC_BRIDGING_HEADER</code> sont bien réglés dans <code>project.pbxproj</code>, dans les deux configurations de build, exactement comme enseigné.</p>
   </div>
 
   <details class="aside">
     <summary>FactoryKit (SPM) va-t-il casser avec l'interop C++ activé ?</summary>
-    <p>Recherche menée avant d'écrire cette leçon : la documentation officielle mentionne une règle de propagation pour les <em>targets de Swift Package</em> — activer l'interop C++ sur un target de package oblige les targets qui en dépendent à l'activer aussi, et c'est un changement cassant pour un package. Cette règle concerne des packages qui dépendent d'<strong>autres targets de packages</strong>, pas le cas de Karamock : ici, c'est l'app qui <em>consomme</em> FactoryKit (un simple import), pas l'inverse. Aucun conflit documenté trouvé pour ce sens de dépendance précis — mais c'est une inférence raisonnée à partir de la règle documentée, pas une garantie noir sur blanc d'Apple. Point à surveiller concrètement à la première compilation après activation : si FactoryKit ou un autre package SPM échoue à résoudre, ce sera un fait nouveau, pas une supposition de cette leçon.</p>
+    <p>Recherche menée avant d'écrire cette leçon : la documentation officielle mentionne une règle de propagation pour les <em>cibles de Swift Package</em> — activer l'interop C++ sur une cible de package oblige les cibles qui en dépendent à l'activer aussi, et c'est une rupture de compatibilité pour un package. Cette règle concerne des packages qui dépendent d'<strong>autres cibles de packages</strong>, pas le cas de Karamock : ici, c'est l'app qui <em>consomme</em> FactoryKit (un simple import), pas l'inverse. Aucun conflit documenté n'a été trouvé pour ce sens de dépendance précis — mais c'est une inférence raisonnée à partir de la règle documentée, pas une garantie noir sur blanc d'Apple. Point à surveiller concrètement à la première compilation après activation : si la résolution de FactoryKit ou d'un autre package SPM échoue, ce sera un fait nouveau, pas une supposition de cette leçon.</p>
   </details>
 
   <div class="verify-scenario">
     <strong>Scénario de vérification, étape par étape :</strong>
     <ol>
-      <li>Dans Xcode : target <code>Karamock</code> → <em>Build Settings</em> → "C++ and Objective-C Interoperability" → <strong>C++/Objective-C++</strong>.</li>
+      <li>Dans Xcode : cible <code>Karamock</code> → <em>Build Settings</em> → "C++ and Objective-C Interoperability" → <strong>C++/Objective-C++</strong>.</li>
       <li>Crée le groupe <code>Engine</code>, ajoute <code>LyricsTimingCheck.hpp</code> et <code>LyricsTimingCheck.cpp</code> ci-dessus.</li>
       <li>Crée <code>Karamock-Bridging-Header.h</code> à la racine du projet Swift, avec le <code>#include</code> ci-dessus.</li>
       <li>Renseigne <em>Build Settings</em> → "Objective-C Bridging Header" → chemin vers ce fichier.</li>
-      <li>Build (⌘B) sur un simulateur iPhone <strong>et</strong> un simulateur Apple TV : les deux doivent réussir — ce mécanisme ne dépend d'aucune plateforme, contrairement à tout l'axe A.</li>
+      <li>Build (⌘B) sur un simulateur iPhone <strong>et</strong> un simulateur Apple TV : les deux doivent réussir — ce mécanisme ne dépend d'aucune plateforme, contrairement à tout l'axe tvOS.</li>
       <li>Ajoute temporairement la ligne <code>Text("C++ check: \(lyricsTimingCheck(41))")</code> dans <code>DiscoveryView.swift</code>, lance l'app : "C++ check: 42" doit s'afficher en haut de l'écran Découvrir, sur les deux plateformes.</li>
       <li>Vérifie qu'aucune dépendance SPM existante (FactoryKit) ne signale d'erreur de résolution après l'activation — point non garanti par la doc, signalé plus haut.</li>
       <li>Retire la ligne de <code>Text</code> temporaire une fois la preuve faite ; garde le reste (réglages, fichiers C++, bridging header) pour la Leçon 36.</li>
@@ -79,7 +79,7 @@ VStack(alignment: .leading, spacing: 24) {
     <tr><td>Projet 100% Swift, "C++ and Objective-C Interoperability" = Objective-C (défaut)</td><td>Interop C++ activée (<code>SWIFT_OBJC_INTEROP_MODE = objcxx</code>), aucun changement de comportement Swift existant</td></tr>
     <tr><td>Aucun fichier <code>.cpp</code>/<code>.hpp</code> dans le projet</td><td><code>Engine/LyricsTimingCheck.hpp</code> + <code>.cpp</code>, une fonction pure minimale</td></tr>
     <tr><td>Aucun bridging header</td><td><code>Karamock-Bridging-Header.h</code>, pointant vers le header C++</td></tr>
-    <tr><td>Aucune preuve que Swift peut appeler du C++ dans cette target</td><td>Appel confirmé, sur iOS et tvOS, sans branche <code>#if os(...)</code> — l'interop C++ est orthogonale à la plateforme</td></tr>
+    <tr><td>Aucune preuve que Swift peut appeler du C++ dans cette cible</td><td>Appel confirmé, sur iOS et tvOS, sans branche <code>#if os(...)</code> — l'interop C++ ne dépend pas de la plateforme cible</td></tr>
   </table>
 
   <div class="source-box">
@@ -93,28 +93,28 @@ VStack(alignment: .leading, spacing: 24) {
   <h2>Vérifie ta compréhension</h2>
 
   <div class="quiz" data-answer="b">
-    <p class="quiz-question">1. Quel réglage Xcode active concrètement l'interop Swift/C++ pour la target existante de Karamock ?</p>
+    <p class="quiz-question">1. Quel réglage Xcode active concrètement l'interop Swift/C++ pour la cible existante de Karamock ?</p>
     <label><input type="radio" name="q1" value="a"> CLANG_CXX_LANGUAGE_STANDARD, déjà présent à "gnu++20"</label>
     <label><input type="radio" name="q1" value="b"> "C++ and Objective-C Interoperability", à passer de Objective-C à C++/Objective-C++</label>
     <label><input type="radio" name="q1" value="c"> SWIFT_VERSION, à passer de 6.0 à 6.0-cxx</label>
-    <label><input type="radio" name="q1" value="d"> Un nouveau target Framework séparé, créé automatiquement par Xcode</label>
+    <label><input type="radio" name="q1" value="d"> Une nouvelle cible Framework séparée, créée automatiquement par Xcode</label>
     <button class="quiz-check">Vérifier</button>
     <p class="quiz-feedback"></p>
   </div>
 
   <div class="quiz" data-answer="c">
-    <p class="quiz-question">2. Quelle version minimale d'Xcode/Swift ce mécanisme demande-t-il, et où se situe Karamock par rapport à ce plancher ?</p>
+    <p class="quiz-question">2. Quelle version minimale d'Xcode/Swift ce mécanisme demande-t-il, et où se situe Karamock par rapport à ce minimum ?</p>
     <label><input type="radio" name="q2" value="a"> Xcode 26 minimum — Karamock est exactement à la limite</label>
     <label><input type="radio" name="q2" value="b"> Xcode 12/Swift 5.0 minimum — bien en dessous du niveau réel du mécanisme</label>
-    <label><input type="radio" name="q2" value="c"> Xcode 15/Swift 5.9 minimum — largement en dessous du plancher actuel du projet (Xcode 26, Swift 6.0)</label>
+    <label><input type="radio" name="q2" value="c"> Xcode 15/Swift 5.9 minimum — très en deçà de ce que le projet exige déjà (Xcode 26, Swift 6.0)</label>
     <label><input type="radio" name="q2" value="d"> Aucune contrainte de version, disponible depuis les débuts de Swift</label>
     <button class="quiz-check">Vérifier</button>
     <p class="quiz-feedback"></p>
   </div>
 
   <div class="quiz" data-answer="a">
-    <p class="quiz-question">3. Pourquoi Karamock a-t-il besoin d'un bridging header, alors qu'une target Framework n'en aurait pas besoin pour le même C++ ?</p>
-    <label><input type="radio" name="q3" value="a"> Seules les targets Framework importent automatiquement le C++ de leurs headers publics ; une target App doit passer par un bridging header explicite</label>
+    <p class="quiz-question">3. Pourquoi Karamock a-t-il besoin d'un bridging header, alors qu'une cible Framework n'en aurait pas besoin pour le même C++ ?</p>
+    <label><input type="radio" name="q3" value="a"> Seules les cibles Framework importent automatiquement le C++ de leurs headers publics ; une cible App doit passer par un bridging header explicite</label>
     <label><input type="radio" name="q3" value="b"> Parce que Karamock cible à la fois iOS et tvOS, ce qui exige toujours un bridging header</label>
     <label><input type="radio" name="q3" value="c"> Parce que FactoryKit exige un bridging header pour tout projet qui l'utilise</label>
     <label><input type="radio" name="q3" value="d"> Parce que Swift 6 a rendu le bridging header obligatoire pour tous les projets, C++ ou non</label>
@@ -153,7 +153,7 @@ VStack(alignment: .leading, spacing: 24) {
   </div>
 
   <div class="quiz" data-answer="a">
-    <p class="quiz-question">7. D'après la recherche menée pour cette leçon, l'interop C++ activée sur la target App risque-t-elle de casser FactoryKit (dépendance SPM) ?</p>
+    <p class="quiz-question">7. D'après la recherche menée pour cette leçon, l'interop C++ activée sur la cible App risque-t-elle de casser FactoryKit (dépendance SPM) ?</p>
     <label><input type="radio" name="q7" value="a"> Aucun conflit documenté trouvé pour ce sens de dépendance (l'app consomme le package) — inférence raisonnée, pas une garantie noir sur blanc, à surveiller à la compilation</label>
     <label><input type="radio" name="q7" value="b"> Oui, la documentation Apple l'affirme explicitement — FactoryKit doit être retiré avant d'activer l'interop</label>
     <label><input type="radio" name="q7" value="c"> Non, c'est garanti sans risque par la documentation officielle, aucune vérification nécessaire</label>

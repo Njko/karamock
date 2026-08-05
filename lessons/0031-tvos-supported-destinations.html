@@ -2,29 +2,29 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<title>Leçon 31 — Ajouter tvOS : une target, plusieurs destinations</title>
+<title>Leçon 31 — Ajouter tvOS : une cible, plusieurs destinations</title>
 <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
 <div class="lesson">
 
   <p class="lesson-kicker">Leçon 31 · Multi-plateforme (1/N)</p>
-  <h1>Ajouter tvOS au projet : une target, plusieurs destinations</h1>
-  <p class="subtitle">Le cycle Nettoyage architecture est bouclé (Leçons 24 à 30). Nouvel axe : faire tourner Karamock sur AppleTV, tel quel, sans réinventer l'UI pour la télécommande. Cette leçon couvre le mécanisme d'ajout de plateforme et les erreurs de compilation réelles qu'il révèle sur l'existant — cinq, dans cinq fichiers différents, pas une seule ni deux.</p>
+  <h1>Ajouter tvOS au projet : une cible, plusieurs destinations</h1>
+  <p class="subtitle">Le cycle Nettoyage architecture est bouclé (Leçons 24 à 30). Nouvel axe : faire tourner Karamock sur Apple TV, tel quel, sans réinventer l'UI pour la télécommande. Cette leçon couvre le mécanisme d'ajout de plateforme et les erreurs de compilation réelles qu'il révèle sur l'existant — cinq, dans cinq fichiers différents, pas une seule ni deux.</p>
 
-  <h2>Le mécanisme : <em>Supported Destinations</em>, pas un nouveau target</h2>
-  <p>Karamock est un target unique, créé avant Xcode 14, iOS seulement (<code>IPHONEOS_DEPLOYMENT_TARGET = 26.5</code>, <code>SDKROOT = iphoneos</code>). Le réflexe le plus intuitif — créer un second target tvOS à côté, dupliquer les fichiers — est précisément ce que Xcode 14 a rendu inutile. Documentation officielle Apple, <a href="https://developer.apple.com/documentation/xcode/configuring-a-multiplatform-app-target">"Configuring a multiplatform app target"</a> :</p>
+  <h2>Le mécanisme : <em>Supported Destinations</em>, pas une nouvelle cible</h2>
+  <p>Karamock est une cible unique, créée avant Xcode 14, et uniquement destinée à iOS (<code>IPHONEOS_DEPLOYMENT_TARGET = 26.5</code>, <code>SDKROOT = iphoneos</code>). Le réflexe le plus intuitif — créer une seconde cible tvOS à côté, dupliquer les fichiers — est précisément ce que Xcode 14 a rendu inutile. Documentation officielle Apple, <a href="https://developer.apple.com/documentation/xcode/configuring-a-multiplatform-app-target">"Configuring a multiplatform app target"</a> :</p>
   <blockquote>"To add a destination to a target, click the Add button (+) under Supported Destinations, and then select the destination from the pop-up menu... iOS, iPadOS, macOS, tvOS, and visionOS apps can share a single target."</blockquote>
-  <p>Et confirmé dans les <a href="https://developer.apple.com/documentation/xcode-release-notes/xcode-14-release-notes">notes de version Xcode 14</a> : <em>"Xcode 14 enables a single target to support multiple platforms and conditionally include dependencies, code, resources, and build settings for specific platforms."</em> La documentation précise explicitement que ce mécanisme fonctionne aussi en partant d'un target mono-plateforme déjà existant, pas seulement depuis le template "Multiplatform App" utilisé à la création d'un nouveau projet — exactement le cas de Karamock.</p>
-  <p>Dans Xcode : sélectionne le projet → la target <code>Karamock</code> → onglet <em>General</em> → section <em>Supported Destinations</em> → bouton <strong>+</strong> → <em>tvOS</em>. Aucun nouveau target n'apparaît ; c'est la même target qui gagne une destination supplémentaire.</p>
+  <p>Et confirmé dans les <a href="https://developer.apple.com/documentation/xcode-release-notes/xcode-14-release-notes">notes de version Xcode 14</a> : <em>"Xcode 14 enables a single target to support multiple platforms and conditionally include dependencies, code, resources, and build settings for specific platforms."</em> La documentation précise explicitement que ce mécanisme fonctionne aussi en partant d'une cible mono-plateforme déjà existante, pas seulement depuis le template "Multiplatform App" utilisé à la création d'un nouveau projet — exactement le cas de Karamock.</p>
+  <p>Dans Xcode : sélectionne le projet → la cible <code>Karamock</code> → onglet <em>General</em> → section <em>Supported Destinations</em> → bouton <strong>+</strong> → <em>tvOS</em>. Aucune nouvelle cible n'apparaît ; c'est la même cible qui gagne une destination supplémentaire.</p>
 
   <details class="aside">
     <summary>Ce qui change concrètement dans les réglages de build</summary>
-    <p>Une fois tvOS ajouté, certains réglages qui n'avaient qu'une seule valeur (comme le deployment target) devienent conditionnels par plateforme — Xcode ajoute une ligne supplémentaire dans l'onglet <em>Build Settings</em>, sélectionnable via le menu déroulant "Any SDK" à côté de chaque réglage concerné. C'est l'effet documenté par Apple ; la forme exacte que ça prend dans <code>project.pbxproj</code> une fois enregistré n'est pas précisément documentée par Apple lui-même — pas la peine de la deviner, Xcode s'en charge à l'enregistrement. Pour un fichier entier spécifique à une plateforme (pas notre cas ici, mais bon à savoir), Apple recommande de le filtrer dans <em>Build Phases → Compile Sources</em>, colonne <em>Filters</em>, plutôt que du code conditionnel à l'intérieur du fichier.</p>
+    <p>Une fois tvOS ajouté, certains réglages qui n'avaient qu'une seule valeur (comme le deployment target) deviennent conditionnels par plateforme — Xcode ajoute une ligne supplémentaire dans l'onglet <em>Build Settings</em>, sélectionnable via le menu déroulant "Any SDK" à côté de chaque réglage concerné. C'est l'effet documenté par Apple ; la forme exacte que ça prend dans <code>project.pbxproj</code> une fois enregistré n'est pas précisément documentée par Apple lui-même — pas la peine de la deviner, Xcode s'en charge à l'enregistrement. Pour un fichier entier spécifique à une plateforme (pas notre cas ici, mais bon à savoir), Apple recommande de le filtrer dans <em>Build Phases → Compile Sources</em>, colonne <em>Filters</em>, plutôt que du code conditionnel à l'intérieur du fichier.</p>
   </details>
 
   <h2>Cinq erreurs de compilation, dans cinq fichiers différents</h2>
-  <p>Ajouter la destination ne suffit pas à faire compiler l'app pour tvOS. Cinq endroits du code utilisent des API qui n'existent tout simplement pas sur cette plateforme — vérifiées une par une via la documentation Apple, pas supposées. Elles se regroupent en quatre causes distinctes (une seule, <code>Slider</code>, revient trois fois dans deux fichiers).</p>
+  <p>Ajouter la destination ne suffit pas à faire compiler l'app pour tvOS. Cinq endroits du code utilisent des API qui n'existent tout simplement pas sur cette plateforme — vérifiées une par une via la documentation Apple, pas supposées. Elles se regroupent en cinq causes distinctes, sur sept lignes au total (une seule cause, <code>Slider</code>, revient trois fois dans deux fichiers).</p>
 
   <p><strong>1. <code>RootTabView.swift</code></strong> — <code>.tabViewBottomAccessory</code> :</p>
   <pre><code>TabView {
@@ -41,14 +41,14 @@
     if let song = player.currentSong { FullScreenPlayerView(song: song) }
 }</code></pre>
   <p>La <a href="https://developer.apple.com/documentation/swiftui/view/tabviewbottomaccessory(isenabled:content:)">documentation officielle de <code>tabViewBottomAccessory(isEnabled:content:)</code></a> liste ses plateformes disponibles : <strong>iOS 26.1, iPadOS 26.1, Mac Catalyst 26.1</strong> — aucune entrée tvOS. Ce n'est pas une limitation de version à rattraper plus tard : cette API n'existe pas du tout sur tvOS, quelle que soit la version.</p>
-  <p><code>.tabBarMinimizeBehavior(.onScrollDown)</code>, juste à côté, compile en revanche sans problème — sa <a href="https://developer.apple.com/documentation/swiftui/view/tabbarminimizebehavior(_:)">documentation</a> liste tvOS 26.0 parmi ses plateformes, une surprise compte tenu du fait que ce comportement concerne un concept de barre d'onglets en bas d'écran, absent sur tvOS (qui affiche ses onglets en haut). Ce n'est donc pas une vraie erreur de compilation. Dans l'implémentation réelle de Nicolas, elle est malgré tout regroupée sous le même <code>#if os(iOS)</code> que <code>.tabViewBottomAccessory</code> — un choix de simplicité (un seul bloc plutôt que deux), pas une nécessité technique : garde ça en tête, ce n'est pas une contradiction avec le fait documenté ci-dessus.</p>
+  <p><code>.tabBarMinimizeBehavior(.onScrollDown)</code>, juste à côté, compile en revanche sans problème — sa <a href="https://developer.apple.com/documentation/swiftui/view/tabbarminimizebehavior(_:)">documentation</a> liste tvOS 26.0 parmi ses plateformes, ce qui surprend, puisque ce comportement concerne un concept de barre d'onglets en bas d'écran, absent sur tvOS (qui affiche ses onglets en haut). Ce n'est donc pas une vraie erreur de compilation. Dans l'implémentation réelle de Nicolas, elle est malgré tout regroupée sous le même <code>#if os(iOS)</code> que <code>.tabViewBottomAccessory</code> — un choix de simplicité (un seul bloc plutôt que deux), pas une nécessité technique. À retenir : ce regroupement est un choix de lisibilité, pas la conséquence d'une indisponibilité de l'API.</p>
 
   <p><strong>2. <code>Discovery/PlaylistDetail/PlaylistDetailView.swift</code></strong> — <code>.navigationBarTitleDisplayMode(.inline)</code> :</p>
   <p>La <a href="https://developer.apple.com/documentation/swiftui/view/navigationbartitledisplaymode(_:)">documentation officielle</a> liste iOS 14.0, iPadOS 14.0, Mac Catalyst 14.0, visionOS 1.0, watchOS 8.0 — <strong>ni tvOS, ni même macOS</strong>. Le nom de l'API le trahit : c'est un concept de <em>navigation bar</em> UIKit qui n'a pas d'équivalent sur tvOS, où la navigation ne repose pas sur une barre en haut d'écran de ce type.</p>
 
   <p><strong>3. <code>Discovery/PlaylistDetail/SongOptionSheet/ModeCard.swift</code></strong> — <code>Color(.secondarySystemBackground)</code> :</p>
   <pre><code>.background(isSelected ? Color.purple.opacity(0.15) : Color(.secondarySystemBackground))</code></pre>
-  <p>Point à ne pas approximer : le coupable précis n'est pas l'initialiseur <code>Color(uiColor:)</code> lui-même — sa <a href="https://developer.apple.com/documentation/swiftui/color/init(uicolor:)">documentation</a> le liste bien disponible sur tvOS (15.0, comme iOS/iPadOS/Mac Catalyst/watchOS). Le vrai blocage est l'argument : <code>UIColor.secondarySystemBackground</code>, dont la <a href="https://developer.apple.com/documentation/uikit/uicolor/secondarysystembackground">documentation</a> ne liste qu'iOS/iPadOS 13.0, Mac Catalyst 13.1 et visionOS 1.0 — absent de tvOS. Le symbole qui échoue à compiler, ce n'est donc pas <code>Color(uiColor:)</code>, c'est la couleur système passée en argument.</p>
+  <p>Point à ne pas survoler : le coupable précis n'est pas l'initialiseur <code>Color(uiColor:)</code> lui-même — sa <a href="https://developer.apple.com/documentation/swiftui/color/init(uicolor:)">documentation</a> le liste bien disponible sur tvOS (15.0, comme iOS/iPadOS/Mac Catalyst/watchOS). Le vrai blocage est l'argument : <code>UIColor.secondarySystemBackground</code>, dont la <a href="https://developer.apple.com/documentation/uikit/uicolor/secondarysystembackground">documentation</a> ne liste qu'iOS/iPadOS 13.0, Mac Catalyst 13.1 et visionOS 1.0 — absent de tvOS. Le symbole qui échoue à compiler, ce n'est donc pas <code>Color(uiColor:)</code>, c'est la couleur système passée en argument.</p>
 
   <p><strong>4. <code>Discovery/PlaylistDetail/SongOptionSheet/SongOptionsForm.swift</code></strong> — <code>.textFieldStyle(.roundedBorder)</code> et deux <code>Slider</code> :</p>
   <pre><code>TextField("Chanteur", text: $viewModel.singerName)
@@ -57,12 +57,12 @@
 Slider(value: $viewModel.pitch, in: -12...12, step: 1)
 // ...
 Slider(value: $viewModel.tempo, in: -50...50, step: 5)</code></pre>
-  <p>La <a href="https://developer.apple.com/documentation/swiftui/textfieldstyle/roundedborder"><code>.roundedBorder</code></a> (<code>RoundedBorderTextFieldStyle</code>) liste iOS/iPadOS/Mac Catalyst 13.0, macOS 10.15, visionOS 1.0 — encore une fois pas de tvOS. Détail à part, sans lien avec tvOS mais bon à savoir : cette même documentation la marque dépréciée depuis 27.0, même sur les plateformes qui la supportent (remplacée par <code>.bordered</code> + <code>textInputBorderShape(.roundedRectangle)</code>) — hors périmètre de cette leçon, mais à surveiller pour une future leçon iOS.</p>
-  <p>La <a href="https://developer.apple.com/documentation/swiftui/slider">documentation officielle de <code>Slider</code></a> liste iOS, iPadOS, Mac Catalyst, macOS, visionOS, watchOS — <strong>tvOS n'apparaît jamais</strong>, à aucune version. Point à ne pas deviner à moitié : le réflexe naturel serait de remplacer <code>Slider</code> par <code>Stepper</code> sur tvOS, mais la <a href="https://developer.apple.com/documentation/swiftui/stepper">documentation de <code>Stepper</code></a> ne liste pas non plus tvOS. Aucun contrôle natif SwiftUI de saisie numérique par plage n'existe sur tvOS — un vrai vide, pas une méconnaissance : jusqu'à des bibliothèques tierces dédiées (par ex. <a href="https://github.com/zattoo/TvOSSlider">zattoo/TvOSSlider</a>, une réimplémentation focus-based) existent précisément pour combler ce manque.</p>
+  <p>La <a href="https://developer.apple.com/documentation/swiftui/textfieldstyle/roundedborder"><code>.roundedBorder</code></a> (<code>RoundedBorderTextFieldStyle</code>) liste iOS/iPadOS/Mac Catalyst 13.0, macOS 10.15, visionOS 1.0 — encore une fois pas de tvOS. Détail à part, sans lien avec tvOS mais bon à savoir : cette même documentation la marque obsolète depuis iOS 27.0, même sur les plateformes qui la supportent (remplacée par <code>.bordered</code> + <code>textInputBorderShape(.roundedRectangle)</code>) — hors périmètre de cette leçon, mais à surveiller pour une future leçon iOS.</p>
+  <p>La <a href="https://developer.apple.com/documentation/swiftui/slider">documentation officielle de <code>Slider</code></a> liste iOS, iPadOS, Mac Catalyst, macOS, visionOS, watchOS — <strong>tvOS n'apparaît jamais</strong>, à aucune version. Point à ne pas deviner à moitié : le réflexe naturel serait de remplacer <code>Slider</code> par <code>Stepper</code> sur tvOS, mais la <a href="https://developer.apple.com/documentation/swiftui/stepper">documentation de <code>Stepper</code></a> ne liste pas non plus tvOS. Aucun contrôle natif SwiftUI de saisie numérique par plage n'existe sur tvOS — un vrai vide, pas une méconnaissance : il existe même des bibliothèques tierces dédiées (par ex. <a href="https://github.com/zattoo/TvOSSlider">zattoo/TvOSSlider</a>, une réimplémentation fondée sur le Focus Engine) précisément pour combler ce manque.</p>
 
   <p><strong>5. <code>Player/FullScreenPlayer/FullScreenPlayerView.swift</code></strong> — un troisième <code>Slider</code> :</p>
   <pre><code>Slider(value: $progress, in: 0...song.durationInSeconds)</code></pre>
-  <p>Même cause exacte que le point 4 : la barre de progression du lecteur plein écran utilise elle aussi <code>Slider</code>, dans un fichier séparé. Trois lignes, deux fichiers, une seule cause documentée — pas la peine de la revérifier une troisième fois, mais facile à manquer si on ne relit pas tout le module Player en cherchant spécifiquement ce symbole.</p>
+  <p>Exactement la même cause qu'au point 4 : la barre de progression du lecteur plein écran utilise elle aussi <code>Slider</code>, dans un fichier séparé. Trois lignes, deux fichiers, une seule cause documentée — pas la peine de la revérifier une troisième fois, mais on peut facilement passer à côté si on ne relit pas tout le module Player en cherchant spécifiquement ce symbole.</p>
 
   <details class="aside">
     <summary>Et FactoryKit (<code>@Injected</code>) ?</summary>
@@ -130,20 +130,20 @@ VStack(spacing: 8) {
   <div class="verify-scenario">
     <strong>Scénario de vérification, étape par étape :</strong>
     <ol>
-      <li>Dans Xcode : Projet → target <code>Karamock</code> → <em>General</em> → <em>Supported Destinations</em> → <strong>+</strong> → <em>tvOS</em>.</li>
-      <li>Sélectionne un schéma/simulateur Apple TV, build (⌘B) <strong>avant</strong> tout correctif : Xcode doit signaler des erreurs dans cinq fichiers — <code>RootTabView.swift</code> (<code>.tabViewBottomAccessory</code>), <code>PlaylistDetailView.swift</code> (<code>.navigationBarTitleDisplayMode</code>), <code>ModeCard.swift</code> (<code>Color(.secondarySystemBackground)</code>), <code>SongOptionsForm.swift</code> (<code>.textFieldStyle(.roundedBorder)</code> + deux <code>Slider</code>) et <code>FullScreenPlayerView.swift</code> (un troisième <code>Slider</code>) — cinq causes distinctes, sept lignes au total.</li>
+      <li>Dans Xcode : Projet → cible <code>Karamock</code> → <em>General</em> → <em>Supported Destinations</em> → <strong>+</strong> → <em>tvOS</em>.</li>
+      <li>Sélectionne un schéma/simulateur Apple TV, build (⌘B) <strong>avant</strong> tout correctif : Xcode doit signaler des erreurs dans cinq fichiers — <code>RootTabView.swift</code> (<code>.tabViewBottomAccessory</code>), <code>PlaylistDetailView.swift</code> (<code>.navigationBarTitleDisplayMode</code>), <code>ModeCard.swift</code> (<code>Color(.secondarySystemBackground)</code>), <code>SongOptionsForm.swift</code> (<code>.textFieldStyle(.roundedBorder)</code> + deux <code>Slider</code>) et <code>FullScreenPlayerView.swift</code> (un troisième <code>Slider</code>) — les cinq causes distinctes annoncées plus haut, sept lignes au total.</li>
       <li>Applique les cinq correctifs <code>#if os(iOS)</code> ci-dessus.</li>
       <li>Build (⌘B) sur le simulateur Apple TV : doit réussir sans erreur, et le build iOS existant doit rester identique (aucune régression pour iPhone/iPad).</li>
       <li>Lance l'app sur le simulateur Apple TV : les onglets Découvrir/Bibliothèque s'affichent en haut d'écran (style tvOS natif de <code>TabView</code>, pas de code à changer pour ça).</li>
       <li>Ouvre une fiche chanson, appuie sur "Jouer maintenant" : le lecteur plein écran s'ouvre normalement, malgré l'absence de mini-lecteur et de barre de progression.</li>
       <li>Ouvre les options d'une chanson : vérifie que tonalité/tempo n'affichent plus de <code>Slider</code> — seule la valeur numérique déjà présente au-dessus reste visible, sans message de remplacement.</li>
-      <li>Observe visuellement si <code>.tabBarMinimizeBehavior(.onScrollDown)</code> a un effet perceptible sur tvOS en scrollant Découvrir — la documentation Apple ne précise pas ce point, seule l'observation directe tranche (ceci dit, dans l'implémentation réelle elle est de toute façon retirée de tvOS en même temps que <code>.tabViewBottomAccessory</code>, donc rien à observer tant que ce regroupement n'est pas changé).</li>
+      <li>Étape facultative : si tu sors <code>.tabBarMinimizeBehavior(.onScrollDown)</code> du bloc <code>#if os(iOS)</code>, regarde si elle produit un effet visible en scrollant Découvrir sur tvOS — la documentation Apple ne précise pas ce point. Telle qu'elle est écrite aujourd'hui (regroupée avec <code>.tabViewBottomAccessory</code>), elle reste désactivée sur tvOS, donc rien à observer sans ce changement.</li>
     </ol>
   </div>
 
   <table class="compare-table">
     <tr><th>Avant</th><th>Après</th></tr>
-    <tr><td>Projet iOS uniquement, un target, une destination</td><td>Même target, deux destinations (iOS + tvOS) via <em>Supported Destinations</em></td></tr>
+    <tr><td>Projet iOS uniquement, une cible, une destination</td><td>Même cible, deux destinations (iOS + tvOS) via <em>Supported Destinations</em></td></tr>
     <tr><td><code>.tabViewBottomAccessory</code> (+ <code>.tabBarMinimizeBehavior</code>) utilisés sans condition</td><td>Regroupés sous <code>#if os(iOS)</code> — seul le premier l'exige réellement, absent de tvOS à toute version</td></tr>
     <tr><td><code>.navigationBarTitleDisplayMode(.inline)</code> utilisé sans condition</td><td>Restreint à <code>#if os(iOS)</code> — absent de tvOS et de macOS</td></tr>
     <tr><td><code>Color(.secondarySystemBackground)</code> utilisé sans condition</td><td>Restreint à <code>#if os(iOS)</code> — c'est <code>UIColor.secondarySystemBackground</code> qui manque sur tvOS, pas <code>Color(uiColor:)</code></td></tr>
@@ -166,9 +166,9 @@ VStack(spacing: 8) {
 
   <div class="quiz" data-answer="c">
     <p class="quiz-question">1. Comment Karamock gagne-t-il la plateforme tvOS, concrètement dans Xcode ?</p>
-    <label><input type="radio" name="q1" value="a"> En créant un second target tvOS et en dupliquant les fichiers Views</label>
+    <label><input type="radio" name="q1" value="a"> En créant une seconde cible tvOS et en dupliquant les fichiers Views</label>
     <label><input type="radio" name="q1" value="b"> En recréant tout le projet avec le template Multiplatform App</label>
-    <label><input type="radio" name="q1" value="c"> En ajoutant tvOS dans Supported Destinations du target existant (General, bouton +)</label>
+    <label><input type="radio" name="q1" value="c"> En ajoutant tvOS dans Supported Destinations de la cible existante (General, bouton +)</label>
     <label><input type="radio" name="q1" value="d"> En créant un Swift Package séparé partagé entre deux projets Xcode</label>
     <button class="quiz-check">Vérifier</button>
     <p class="quiz-feedback"></p>
@@ -197,7 +197,7 @@ VStack(spacing: 8) {
   <div class="quiz" data-answer="a">
     <p class="quiz-question">4. Pourquoi remplacer <code>Slider</code> par <code>Stepper</code> sur tvOS ne fonctionne-t-il pas non plus ?</p>
     <label><input type="radio" name="q4" value="a"> Parce que Stepper n'est lui non plus listé sur aucune version de tvOS dans sa documentation</label>
-    <label><input type="radio" name="q4" value="b"> Parce que Stepper exige obligatoirement un Binding<Int>, jamais un Binding<Double></label>
+    <label><input type="radio" name="q4" value="b"> Parce que Stepper exige obligatoirement un Binding&lt;Int&gt;, jamais un Binding&lt;Double&gt;</label>
     <label><input type="radio" name="q4" value="c"> Parce que Stepper est réservé aux apps Mac Catalyst depuis la dernière mise à jour</label>
     <label><input type="radio" name="q4" value="d"> Parce que Stepper entre en conflit avec le Focus Engine par défaut</label>
     <button class="quiz-check">Vérifier</button>
@@ -215,8 +215,8 @@ VStack(spacing: 8) {
   </div>
 
   <div class="quiz" data-answer="b">
-    <p class="quiz-question">6. Que recommande la documentation Apple pour gérer du code spécifique à une seule plateforme dans un target multi-destinations ?</p>
-    <label><input type="radio" name="q6" value="a"> Créer systématiquement un second target, même pour une seule ligne différente</label>
+    <p class="quiz-question">6. Que recommande la documentation Apple pour gérer du code spécifique à une seule plateforme dans une cible multi-destinations ?</p>
+    <label><input type="radio" name="q6" value="a"> Créer systématiquement une seconde cible, même pour une seule ligne différente</label>
     <label><input type="radio" name="q6" value="b"> Des conditions #if os(...)/#if canImport(...), ou exclure un fichier entier via les filtres de Compile Sources</label>
     <label><input type="radio" name="q6" value="c"> Ne jamais utiliser d'API spécifique à une plateforme, sous aucun prétexte</label>
     <label><input type="radio" name="q6" value="d"> Déclarer chaque View comme un Swift Package séparé par plateforme</label>

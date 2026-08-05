@@ -16,7 +16,7 @@
   <p>Ordre du plus simple au plus complexe. Chaque section cite la doc Apple vérifiée avant tout code.</p>
 
   <h3>1. Titre de navigation — <code>PlaylistDetailView.swift</code> — aucune alternative n'existe, vérifié</h3>
-  <p>La <a href="https://developer.apple.com/documentation/swiftui/view/navigationbartitledisplaymode(_:)"><code>.navigationBarTitleDisplayMode(_:)</code></a> retirée en Leçon 31 n'a pas d'équivalent tvOS. Recherche faite spécifiquement pour cette leçon : aucun modificateur tvOS-spécifique de contrôle d'affichage de titre n'existe dans la documentation SwiftUI. <a href="https://developer.apple.com/documentation/swiftui/view/navigationtitle(_:)"><code>.navigationTitle(_:)</code></a> lui-même est bien disponible sur tvOS (14.0+) et continue de fonctionner tel quel — mais sa page de documentation ne décrit un comportement spécifique que pour iOS/iPadOS/macOS/watchOS, pas pour tvOS. Absence de preuve n'est pas preuve d'absence en général, mais ici c'est le résultat le plus solide qu'on puisse obtenir : pas de mécanisme documenté à activer, donc rien à ajouter. Le code de la Leçon 31 reste inchangé :</p>
+  <p>La <a href="https://developer.apple.com/documentation/swiftui/view/navigationbartitledisplaymode(_:)"><code>.navigationBarTitleDisplayMode(_:)</code></a> retirée en Leçon 31 n'a pas d'équivalent tvOS. Recherche faite spécifiquement pour cette leçon : aucun modificateur spécifique à tvOS pour contrôler l'affichage du titre n'existe dans la documentation SwiftUI. <a href="https://developer.apple.com/documentation/swiftui/view/navigationtitle(_:)"><code>.navigationTitle(_:)</code></a> lui-même est bien disponible sur tvOS (14.0+) et continue de fonctionner tel quel — mais sa page de documentation ne décrit un comportement spécifique que pour iOS/iPadOS/macOS/watchOS, pas pour tvOS. Ne rien trouver ne prouve pas que ça n'existe pas — mais c'est ici le résultat le plus fiable qu'on puisse obtenir : pas de mécanisme documenté à activer, donc rien à ajouter. Le code de la Leçon 31 reste inchangé :</p>
   <pre><code>.ignoresSafeArea(edges: .top)
 #if os(iOS)
 .navigationBarTitleDisplayMode(.inline)
@@ -33,7 +33,7 @@
 #endif</code></pre>
 
   <h3>3. Fond de carte — <code>ModeCard.swift</code> — <code>Material</code>, pas <code>Color</code></h3>
-  <p><code>Color(.secondarySystemBackground)</code> échoue sur tvOS (Leçon 31, coupable identifié : <code>UIColor.secondarySystemBackground</code>). La <a href="https://developer.apple.com/documentation/swiftui/shapestyle/regularmaterial"><code>.regularMaterial</code></a> (type <a href="https://developer.apple.com/documentation/swiftui/material"><code>Material</code></a>) est en revanche confirmée disponible tvOS 15.0+ — un vrai remplacement, pas une improvisation. Différence structurelle à gérer : <code>Material</code> est un effet de flou/vibrance, pas une couleur avec opacité réglable comme <code>Color.purple.opacity(0.15)</code> ; il ne peut donc pas à lui seul distinguer visuellement l'état sélectionné. Solution retenue : le <code>Material</code> reste constant, une bordure violette apparaît seulement quand <code>isSelected</code> est vrai (mécanisme SwiftUI standard, sans dépendance de plateforme) :</p>
+  <p><code>Color(.secondarySystemBackground)</code> échoue sur tvOS (Leçon 31, coupable identifié : <code>UIColor.secondarySystemBackground</code>). La <a href="https://developer.apple.com/documentation/swiftui/shapestyle/regularmaterial"><code>.regularMaterial</code></a> (type <a href="https://developer.apple.com/documentation/swiftui/material"><code>Material</code></a>) est en revanche confirmée disponible tvOS 15.0+ — un vrai remplacement, pas une improvisation. Différence structurelle à gérer : <code>Material</code> est un effet de flou et de translucidité, pas une couleur à opacité réglable comme <code>Color.purple.opacity(0.15)</code> ; il ne peut donc pas à lui seul distinguer visuellement l'état sélectionné. Solution retenue : le <code>Material</code> reste constant, une bordure violette apparaît seulement quand <code>isSelected</code> est vrai (mécanisme SwiftUI standard, sans dépendance de plateforme) :</p>
   <pre><code>.padding()
 #if os(iOS)
 .background(isSelected ? Color.purple.opacity(0.15) : Color(.secondarySystemBackground))
@@ -50,9 +50,9 @@
   <h3>4. Réglages par pas — tonalité, tempo, progression — <code>FocusStepperTV</code>, nouveau composant partagé</h3>
   <p><code>Slider</code> n'existe sur aucune version de tvOS (Leçon 31), et ni lui ni <code>Stepper</code> n'ont d'équivalent natif. Avant de construire quoi que ce soit, trois faits vérifiés séparément :</p>
   <ul style="margin: 0 0 16px 20px; line-height: 1.7;">
-    <li>Un <code>Button</code> SwiftUI ordinaire gère seul le focus <em>et</em> l'activation télécommande sur tvOS — sa <a href="https://developer.apple.com/documentation/swiftui/button">documentation officielle</a> l'affirme explicitement : "In tvOS, the user presses 'select' on an external remote, like the Siri Remote, while focusing on the button." Aucun <code>.focusable()</code> ni <code>@FocusState</code> nécessaire pour un simple bouton — ces deux mécanismes sont réservés à des vues personnalisées non-Button qui doivent gérer le focus elles-mêmes (confirmé par la doc de <a href="https://developer.apple.com/documentation/swiftui/view/focusable(_:)"><code>.focusable(_:)</code></a>).</li>
-    <li><code>CardButtonStyle</code> (<code>.card</code>), le style le plus "tvOS" qui existe (tvOS 14.0+ <strong>exclusivement</strong>, absent de toutes les autres plateformes), ne convient pas ici : sa documentation le décrit comme appliquant "a motion effect when a button has focus" — pensé pour des cartes de contenu à parcourir (posters, vignettes), pas pour un petit bouton icône +/-. <code>.plain</code> (tvOS 13.0+), déjà la convention du projet pour les boutons icône (voir <code>MiniPlayerBar.swift</code>), reste le bon choix ici aussi.</li>
-    <li>Aucun mécanisme officiellement documenté n'a été trouvé pour l'appui long/accélération (presser-maintenir pour aller plus vite) sur un contrôle SwiftUI tvOS. Décision explicite : chaque clic = un pas, rien de plus. Pas d'invention d'un geste non documenté.</li>
+    <li>Un <code>Button</code> SwiftUI ordinaire gère seul le focus <em>et</em> l'activation à la télécommande sur tvOS — sa <a href="https://developer.apple.com/documentation/swiftui/button">documentation officielle</a> l'affirme explicitement : "In tvOS, the user presses 'select' on an external remote, like the Siri Remote, while focusing on the button." (en clair : sur tvOS, l'utilisateur appuie sur "select" pendant que le bouton a le focus). Aucun <code>.focusable()</code> ni <code>@FocusState</code> nécessaire pour un simple bouton — ces deux mécanismes sont réservés aux vues personnalisées qui ne sont pas des <code>Button</code> et doivent gérer le focus elles-mêmes (confirmé par la doc de <a href="https://developer.apple.com/documentation/swiftui/view/focusable(_:)"><code>.focusable(_:)</code></a>).</li>
+    <li><code>CardButtonStyle</code> (<code>.card</code>), le style le plus "tvOS" qui existe (tvOS 14.0+ <strong>exclusivement</strong>, absent de toutes les autres plateformes), ne convient pas ici : sa documentation le décrit comme appliquant "a motion effect when a button has focus" (un effet de mouvement lorsque le bouton reçoit le focus) — pensé pour des cartes de contenu à parcourir (posters, vignettes), pas pour un petit bouton icône +/-. <code>.plain</code> (tvOS 13.0+), déjà la convention du projet pour les boutons icône (voir <code>MiniPlayerBar.swift</code>), reste le bon choix ici aussi.</li>
+    <li>Aucun mécanisme officiellement documenté n'a été trouvé pour l'appui prolongé avec accélération (maintenir le bouton enfoncé pour aller plus vite) sur un contrôle SwiftUI tvOS. Décision explicite : chaque clic = un pas, rien de plus. Pas d'invention d'un geste non documenté.</li>
   </ul>
   <pre><code>// NOUVEAU — Views/Common/FocusStepperTV.swift
 struct FocusStepperTV: View {
@@ -79,7 +79,7 @@ struct FocusStepperTV: View {
         .buttonStyle(.plain)
     }
 }</code></pre>
-  <p>Utilisation pour la tonalité (même geste pour le tempo, bornes <code>-50...50</code>, pas de 5) :</p>
+  <p>Utilisation pour la tonalité (même démarche pour le tempo, bornes <code>-50...50</code>, par pas de 5) :</p>
   <pre><code>// SongOptionsForm.swift
 HStack {
     Text("Tonalité")
@@ -121,11 +121,11 @@ VStack(spacing: 8) {
 
   <details class="aside">
     <summary>Écart relevé dans l'implémentation réelle : le pas du tempo</summary>
-    <p>Comparé le 2026-08-02 avec l'implémentation réelle de Nicolas : le geste pour le tempo utilise <code>viewModel.tempo - 1</code> / <code>+ 1</code> au lieu de <code>-5</code>/<code>+5</code> — vraisemblablement un copier-coller du bloc tonalité sans ajuster le pas. Conséquence : sur tvOS, le tempo (plage <code>-50...50</code>) avance par pas de 1, dix fois plus fin qu'sur iOS où <code>Slider(value: $viewModel.tempo, in: -50...50, step: 5)</code> avançait par 5. Pas corrigé ici — juste signalé, pour que Nicolas ajuste <code>onDecrement</code>/<code>onIncrement</code> du tempo à des pas de 5 s'il veut retrouver la granularité d'origine (plus de clics nécessaires pour parcourir toute la plage, sinon).</p>
+    <p>Comparé le 2026-08-02 avec l'implémentation réelle de Nicolas : le geste pour le tempo utilise <code>viewModel.tempo - 1</code> / <code>+ 1</code> au lieu de <code>-5</code>/<code>+5</code> — vraisemblablement un copier-coller du bloc tonalité sans ajuster le pas. Conséquence : sur tvOS, le tempo (plage <code>-50...50</code>) avance par pas de 1, dix fois plus fin que sur iOS où <code>Slider(value: $viewModel.tempo, in: -50...50, step: 5)</code> avançait par 5. Pas corrigé ici — seulement signalé, pour que Nicolas ajuste <code>onDecrement</code>/<code>onIncrement</code> du tempo à des pas de 5 s'il veut retrouver le pas d'origine — sans quoi il faut dix fois plus de clics pour parcourir toute la plage.</p>
   </details>
 
   <h3>5. Mini-lecteur — <code>RootTabView.swift</code> — <code>MiniPlayerBarTV</code>, nouveau composant dédié</h3>
-  <p><code>.tabViewBottomAccessory</code> n'a pas d'équivalent tvOS (Leçon 31). La leçon aurait pu réutiliser <code>MiniPlayerBar</code> tel quel — mais ce composant iOS repose sur un <code>.onTapGesture</code> posé sur toute la zone (pas un vrai <code>Button</code>) plus un <code>Button</code> imbriqué à l'intérieur pour play/pause. Or la doc <code>Button</code> citée au point 4 est claire : sur tvOS, l'interaction documentée passe par le focus + select sur un <code>Button</code>, pas par un <code>onTapGesture</code> générique. Et imbriquer deux <code>Button</code> l'un dans l'autre pose un problème indépendant du langage : le Focus Engine ne peut donner le focus qu'à <strong>un seul</strong> élément activable à la fois, donc le bouton interne imbriqué n'a de toute façon aucune garantie d'être atteignable séparément.</p>
+  <p><code>.tabViewBottomAccessory</code> n'a pas d'équivalent tvOS (Leçon 31). La leçon aurait pu réutiliser <code>MiniPlayerBar</code> tel quel — mais ce composant iOS repose sur un <code>.onTapGesture</code> posé sur toute la zone (et non sur un vrai <code>Button</code>), auquel s'ajoute un <code>Button</code> imbriqué pour play/pause. Or la doc <code>Button</code> citée au point 4 est claire : sur tvOS, l'interaction documentée passe par le focus + select sur un <code>Button</code>, pas par un <code>onTapGesture</code> générique. Et imbriquer deux <code>Button</code> l'un dans l'autre pose un problème indépendant du langage : le Focus Engine ne peut donner le focus qu'à <strong>un seul</strong> élément activable à la fois, donc le bouton interne imbriqué n'a de toute façon aucune garantie d'être atteignable séparément.</p>
   <p>Décision de conception (un choix, pas une règle Apple citée) : <code>MiniPlayerBarTV</code> ne fait qu'une seule chose — focus + select ouvre le lecteur plein écran. Le vrai bouton play/pause reste exclusivement dans <code>FullScreenPlayerView</code>, qui l'a déjà.</p>
   <pre><code>// NOUVEAU — Views/Player/MiniPlayerBar/MiniPlayerBarTV.swift
 struct MiniPlayerBarTV: View {
@@ -161,7 +161,7 @@ struct MiniPlayerBarTV: View {
         .accessibilityHint("Ouvrir le lecteur plein écran")
     }
 }</code></pre>
-  <p>Branché via un <code>.overlay</code> manuel, puisqu'aucune API SwiftUI équivalente à l'accessoire iOS n'existe sur tvOS :</p>
+  <p>Ajouté via un <code>.overlay</code> posé à la main, puisqu'aucune API SwiftUI équivalente à l'accessoire iOS n'existe sur tvOS :</p>
   <pre><code>// RootTabView.swift
 TabView {
     DiscoveryView().tabItem { Label("Découvrir", systemImage: "book.closed.fill") }
@@ -191,7 +191,7 @@ TabView {
 
   <details class="aside">
     <summary>Pourquoi pas de presser-maintenir pour accélérer le réglage ?</summary>
-    <p>Vérifié spécifiquement pour cette leçon, via sous-agent spécialiste : aucune page de documentation Apple ne décrit de mécanisme officiel SwiftUI pour "maintenir le bouton select enfoncé pour accélérer" un contrôle par pas sur tvOS. Des discussions communautaires mentionnent <code>UILongPressGestureRecognizer</code> côté UIKit ou le comportement d'auto-répétition de <code>MPRemoteCommandCenter</code> pour le seek média — mais ce sont des sources secondaires, pas une API SwiftUI documentée pour ce cas précis. Plutôt que d'improviser un geste non vérifié, <code>FocusStepperTV</code> reste volontairement au clic simple. À réévaluer si Nicolas trouve un besoin réel une fois testé à la télécommande.</p>
+    <p>Vérification menée spécifiquement pour cette leçon, documentation Apple à l'appui : aucune page de documentation Apple ne décrit de mécanisme officiel SwiftUI pour "maintenir le bouton select enfoncé pour accélérer" un contrôle par pas sur tvOS. Des discussions communautaires mentionnent <code>UILongPressGestureRecognizer</code> côté UIKit ou le comportement d'auto-répétition de <code>MPRemoteCommandCenter</code> pour le déplacement dans le média — mais ce sont des sources secondaires, pas une API SwiftUI documentée pour ce cas précis. Plutôt que d'improviser un geste non vérifié, <code>FocusStepperTV</code> reste volontairement au clic simple. À réévaluer si un besoin réel apparaît après un essai à la télécommande.</p>
   </details>
 
   <div class="verify-scenario">
@@ -199,11 +199,11 @@ TabView {
     <ol>
       <li>Build (⌘B) sur le simulateur Apple TV : doit réussir sans erreur, comme à la fin de la Leçon 31, et le build iOS doit rester identique (aucune régression).</li>
       <li>Ouvre une fiche chanson : <code>ModeCard</code> affiche un fond flouté (<code>Material</code>) constant, avec une bordure violette uniquement sur la carte actuellement sélectionnée.</li>
-      <li>Le champ "Chanteur" reste utilisable normalement (ouverture du clavier à distance standard de tvOS).</li>
-      <li>Tonalité et tempo affichent chacun deux boutons +/- au lieu du <code>Slider</code> retiré ; navigue au focus dessus et clique "select" plusieurs fois : la valeur change par pas, les boutons se désactivent visuellement aux bornes (-12/12 et -50/50).</li>
+      <li>Le champ "Chanteur" reste utilisable normalement (le clavier standard de tvOS s'ouvre normalement).</li>
+      <li>Tonalité et tempo affichent chacun deux boutons +/- au lieu du <code>Slider</code> retiré ; amène le focus dessus avec la télécommande, puis appuie plusieurs fois sur "select" : la valeur change par pas, les boutons se désactivent visuellement aux bornes (-12/12 et -50/50).</li>
       <li>Lance "Jouer maintenant" : une barre <code>MiniPlayerBarTV</code> apparaît en bas de l'écran Découvrir/Bibliothèque pendant la navigation, focus + select l'ouvre en plein écran.</li>
       <li>Dans le lecteur plein écran : les mêmes boutons +/- pilotent la progression par pas de 10 secondes, à la place du <code>Slider</code> retiré. Le bouton play/pause du lecteur plein écran continue de fonctionner comme avant — c'est le seul endroit où il existe sur tvOS.</li>
-      <li>Ouvre le titre d'une playlist : aucun changement visuel attendu par rapport à avant cette leçon — confirme que l'absence d'alternative pour <code>navigationBarTitleDisplayMode</code> ne casse rien.</li>
+      <li>Ouvre une playlist et observe son titre : aucun changement visuel attendu par rapport à avant cette leçon — confirme que l'absence d'alternative pour <code>navigationBarTitleDisplayMode</code> ne casse rien.</li>
     </ol>
   </div>
 
@@ -322,7 +322,7 @@ TabView {
   <p class="ask-teacher">Un comportement de focus surprenant apparaît sur le simulateur Apple TV (par exemple le focus qui "saute" mal entre la barre d'onglets et le mini-lecteur, ou entre les boutons +/-) ? C'est exactement le genre de détail que seul un vrai test à la télécommande révèle — note-le et on ajuste, plutôt que de deviner une correction depuis Windows.</p>
 
   <div class="lesson-nav">
-    <span><a href="0031-tvos-supported-destinations.html">← Leçon 31 : ajouter tvOS au projet, une target, plusieurs destinations</a></span>
+    <span><a href="0031-tvos-supported-destinations.html">← Leçon 31 : ajouter tvOS au projet, une cible, plusieurs destinations</a></span>
     <span><a href="0033-tvos-lecteur-ecran-dedie.html">Leçon 33 : le lecteur plein écran quitte la modale →</a></span>
   </div>
 
