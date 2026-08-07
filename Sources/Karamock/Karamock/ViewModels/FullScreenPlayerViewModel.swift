@@ -6,11 +6,13 @@
 //
 
 import Foundation
+import CxxStdlib
 
 @MainActor
 @Observable
 final class FullScreenPlayerViewModel {
     private(set) var lyrics: [LyricsLine] = placeholderLyrics
+    private var lyricsStore = karamock.LyricsStore()
     
     private let song: Song
     private let fetchLyrics: FetchLyricsUseCase
@@ -33,5 +35,15 @@ final class FullScreenPlayerViewModel {
                 lyrics = [LyricsLine(time: 0, text: "Paroles indisponibles pour le moment.")]
             }
         }
+        sendLyricsToEngine()
+    }
+    
+    private func sendLyricsToEngine() {
+        lyricsStore.clear()
+        lyricsStore.reserve(lyrics.count)
+        for line in lyrics {
+            lyricsStore.addLine(line.time, std.string(line.text))
+        }
+        assert(lyricsStore.lineCount() == lyrics.count)
     }
 }

@@ -3,4 +3,4 @@
 //  Karamock
 //
 
-#include "Engine/LyricsTimingCheck.hpp"
+#include "Engine/LyricsStore.hpp"
