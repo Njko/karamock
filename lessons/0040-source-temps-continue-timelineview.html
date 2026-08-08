@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 40 — Une source de temps continue, sans interpolation</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 40 · Moteur de paroles en C++ (4/N)</p>
+  <h1>Une source de temps continue, sans interpolation</h1>
+  <p class="subtitle">Depuis la Leçon 37, <code>EngineProofView</code> produit une seule image, figée à un instant choisi à la main (<code>2.5</code> en Leçon 39). Cette leçon fait tourner le temps pour de vrai : <code>TimelineView</code> redessine l'image plusieurs fois par seconde, <code>currentTime</code> avance réellement, et la ligne active de <code>LyricsPage</code> change sous tes yeux entre les trois lignes de test. Elle saute encore net d'une position à l'autre, sans aucune transition lissée — ce lissage est le sujet de la leçon suivante, pas de celle-ci. Détail à noter : leçon inhabituelle dans cette série, aucun fichier C++ ne change. Le moteur sait déjà tout faire depuis la Leçon 39 ; il ne reste qu'à l'appeler en continu plutôt qu'une seule fois.</p>
+
+  <h2>Le problème d'un rendu figé une seule fois</h2>
+  <p>Rappel de ce que fait <code>EngineProofView</code> depuis la Leçon 37 :</p>
+  <pre><code>// État avant cette leçon
+.task (id: displayScale) {
+    image = Self.render(pointSize: pointSize, scale: displayScale)
+}</code></pre>
+  <p><code>.task(id: displayScale)</code> ne se redéclenche que si <code>displayScale</code> change (passage @2x → @3x, changement d'écran) — jamais parce que le temps avance. <code>render()</code> calcule une image, une fois, avec un <code>currentTime</code> constant codé en dur. Rien dans cette chaîne ne rappelle <code>render()</code> une seconde fois pour montrer une ligne différente.</p>
+
+  <h2>TimelineView : une source de temps qui redessine</h2>
+  <p><code>TimelineView</code> résout exactement ce problème : il exécute sa closure de contenu à intervalles réguliers, chaque exécution recevant un <code>context.date</code> à jour.</p>
+  <pre><code>// NOUVEAU — principe
+TimelineView(.periodic(from: startDate, by: 0.1)) { context in
+    // recalculé environ 10 fois par seconde, context.date avance à chaque fois
+}</code></pre>
+  <p><code>.periodic(from:by:)</code> déclenche un nouveau <code>context.date</code> toutes les <code>0.1</code> seconde à partir de <code>startDate</code>. <code>0.1</code> seconde (10 Hz) suffit largement pour voir la ligne active changer sans à-coup perceptible dans <em>ce</em> rendu — un rendu à 60 images/seconde serait inutilement coûteux ici puisque chaque tick relance une rastérisation logicielle complète (Leçon 38), pas un simple changement de propriété SwiftUI. Le choix de la fréquence est justement le genre de compromis qu'une vraie boucle de lecture devra revisiter plus tard.</p>
+
+  <h2>Pourquoi @State private var startDate = Date(), pas juste let</h2>
+  <p>Piège facile à ne pas voir avant qu'il ne se manifeste : une <code>View</code> SwiftUI est une struct, une simple description reconstruite à chaque fois que son parent se redessine — ce qui arrive pour toutes sortes de raisons sans rapport avec <code>EngineProofView</code> elle-même. Une propriété stockée ordinaire (<code>let startDate = Date()</code>) serait donc réévaluée à chaque reconstruction, redonnant un "maintenant" différent à chaque fois — l'origine du temps ne cesserait de se réinitialiser, et <code>currentTime</code> semblerait redémarrer à zéro sans raison visible.</p>
+  <pre><code>// CORRECTION
+@State private var startDate = Date()</code></pre>
+  <p><code>@State</code> stocke la valeur en dehors de la struct elle-même, dans un espace de stockage géré par SwiftUI qui survit aux reconstructions successives — exactement le mécanisme qui permet déjà à <code>@State private var image</code> (Leçon 37) de garder son image entre deux passages de <code>body</code>. Rien de nouveau dans le mécanisme, seulement une nouvelle occasion de l'oublier : toute donnée qui doit "tenir" au-delà d'un seul passage de <code>body</code> a besoin de <code>@State</code> (ou d'un mécanisme équivalent), jamais d'une propriété stockée ordinaire.</p>
+
+  <h2>Le vrai coût caché : recharger la police à chaque tick</h2>
+  <p>À 10 exécutions par seconde, un détail qui ne posait aucun problème appelé une seule fois devient un vrai gâchis répété : <code>Bundle.main.url(forResource:withExtension:)</code> (recherche dans le bundle) puis <code>Data(contentsOf:)</code> (lecture disque) à chaque tick, pour un fichier qui ne change jamais après le premier chargement.</p>
+  <pre><code>// CORRECTION — chargé une seule fois, mis en cache
+@State private var fontData: Data?</code></pre>
+  <pre><code>// NOUVEAU — dans body, avant le TimelineView
+.task {
+    guard fontData == nil else { return }   // ne recharge jamais une deuxième fois
+    guard let fontURL = Bundle.main.url(forResource: "NotoSans-Regular", withExtension: "ttf")
+    else { return }
+    fontData = try? Data(contentsOf: fontURL)
+}</code></pre>
+  <p><code>Data</code> est un type Swift ordinaire, entièrement copiable — aucun obstacle à le garder dans <code>@State</code>. <code>karamock.Font</code>, en revanche, reste construit à neuf à chaque tick, à l'intérieur de <code>render()</code>, exactement comme depuis la Leçon 38 :</p>
+  <pre><code>// Toujours dans render(), reconstruit à chaque appel
+var font = karamock.Font()
+guard loadFont(from: fontData, into: &amp;font) else { return nil }</code></pre>
+  <p>Pas un oubli : <code>Font</code> interdit explicitement sa copie depuis la Leçon 38 (<code>Font(const Font&amp;) = delete</code>, pour empêcher deux <code>Font</code> de pointer vers les mêmes octets). Le stockage <code>@State</code> de SwiftUI doit pouvoir conserver et redonner sa valeur à chaque passage de <code>body</code> — un type C++ move-only s'y prête mal, et forcer la question sort du cadre de cette leçon. La solution retenue ici contourne le problème plutôt que de l'affronter : mettre en cache les <em>octets</em> (<code>Data</code>, triviallement copiable), et reconstruire le petit objet <code>Font</code> à partir de ces octets déjà en mémoire à chaque tick. Le résultat reste correct — <code>stbtt_InitFont</code> ne fait que lire des tables d'en-tête, aucune rastérisation de glyphe n'a lieu avant que <code>drawText</code> ne soit réellement appelée — seule la lecture disque, la vraie dépense évitable, est éliminée.</p>
+
+  <h2>Le fichier complet</h2>
+  <pre><code>// CORRECTION — Views/Discovery/EngineProofView.swift (fichier complet)
+import CoreGraphics
+import Foundation
+import SwiftUI
+
+struct EngineProofView: View {
+    @Environment(\.displayScale) private var displayScale
+    @State private var startDate = Date()
+    @State private var fontData: Data?
+
+    private let pointSize = CGSize(width: 320, height: 200)
+
+    var body: some View {
+        TimelineView(.periodic(from: startDate, by: 0.1)) { context in
+            content(at: context.date)
+                .frame(width: pointSize.width, height: pointSize.height)
+        }
+        .task {
+            guard fontData == nil else { return }
+            guard let fontURL = Bundle.main.url(forResource: "NotoSans-Regular", withExtension: "ttf")
+            else { return }
+            fontData = try? Data(contentsOf: fontURL)
+        }
+    }
+
+    @ViewBuilder
+    private func content(at date: Date) -> some View {
+        if let fontData,
+           let image = Self.render(pointSize: pointSize, scale: displayScale,
+                                    fontData: fontData, currentTime: date.timeIntervalSince(startDate)) {
+            Image(decorative: image, scale: displayScale)
+                .interpolation(.none)
+        } else {
+            ProgressView()
+        }
+    }
+
+    private static func render(pointSize: CGSize, scale: CGFloat,
+                                fontData: Data, currentTime: Double) -> CGImage? {
+        let pixelWidth  = Int((pointSize.width  * scale).rounded())
+        let pixelHeight = Int((pointSize.height * scale).rounded())
+
+        var font = karamock.Font()
+        guard loadFont(from: fontData, into: &amp;font) else { return nil }
+
+        var buffer = karamock.PixelBuffer()
+        buffer.resize(Int32(pixelWidth), Int32(pixelHeight))
+        buffer.fill(20, 20, 30)
+
+        var lyricsStore = karamock.LyricsStore()
+        let testLines: [(time: Double, text: String)] = [
+            (0.0, "Premiere ligne, deja terminee"),
+            (2.0, "Deuxieme ligne, celle qui joue maintenant"),
+            (4.0, "Troisieme ligne, pas encore arrivee")
+        ]
+        lyricsStore.reserve(testLines.count)
+        for line in testLines {
+            lyricsStore.addLine(line.time, std.string(line.text))
+        }
+
+        var renderer = karamock.TextRenderer()
+        let page = karamock.LyricsPage()
+        page.render(&amp;buffer, font, &amp;renderer, lyricsStore, currentTime)
+
+        guard let base = buffer.__dataUnsafe() else { return nil }
+        let pixels = Data(bytes: base, count: buffer.sizeInBytes())
+
+        guard let provider = CGDataProvider(data: pixels as CFData),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+        else { return nil }
+
+        let bitmapInfo = CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                    | CGImageByteOrderInfo.order32Big.rawValue
+        )
+
+        return CGImage(
+            width: Int(buffer.width()), height: Int(buffer.height()),
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: Int(buffer.bytesPerRow()),
+            space: colorSpace, bitmapInfo: bitmapInfo, provider: provider,
+            decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        )
+    }
+
+    private static func loadFont(from data: Data, into font: inout karamock.Font) -> Bool {
+        data.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                return false
+            }
+            return font.loadFromMemory(baseAddress, rawBuffer.count)
+        }
+    }
+}</code></pre>
+  <p>Bonus qui n'a rien coûté : <code>content(at:)</code> lit <code>displayScale</code> depuis l'environnement à chaque tick, comme n'importe quelle autre valeur utilisée dans <code>body</code>. Un changement d'échelle d'affichage (déplacer la fenêtre vers un autre écran, par exemple) est donc pris en compte automatiquement au tick suivant — le <code>.task(id: displayScale)</code> explicite des Leçons 37 à 39, qui ne servait qu'à ça, n'est plus nécessaire.</p>
+  <p><code>LyricsStore</code>, <code>PixelBuffer</code>, <code>TextRenderer</code> et <code>LyricsPage</code> restent eux aussi reconstruits à chaque tick, sans mise en cache — délibérément laissé ainsi pour cette leçon. Leur construction ne coûte ni lecture disque ni rastération de glyphe tant que <code>drawText</code> n'est pas appelée ; le tout reste bon marché à l'échelle de trois lignes de test. Un vrai lecteur, avec de vraies paroles et un vrai flux audio, voudra probablement un objet "moteur" persistant réutilisé d'une frame à l'autre plutôt que tout reconstruire — une question qui se posera quand la lecture réelle, pas seulement cette vue de preuve, sera branchée.</p>
+
+  <div class="mission-tie">
+    <strong>État réel de l'implémentation (comparé le 8 août 2026) :</strong> conforme exactement à ce qu'enseigne cette leçon — <code>TimelineView(.periodic(from: startDate, by: 0.1))</code>, <code>@State private var fontData: Data?</code>, <code>content(at:)</code> et la signature de <code>render(pointSize:scale:fontData:currentTime:)</code> sont identiques, y compris le <code>guard fontData == nil else { return }</code> dans le <code>.task</code>. Aucun écart à corriger.
+  </div>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build (⌘B) sur un simulateur iPhone <strong>et</strong> un simulateur Apple TV.</li>
+      <li>Ouvre l'écran Découvrir : les trois lignes de test doivent défiler automatiquement — la ligne active doit changer sans action de ta part, sans reload manuel.</li>
+      <li>Observe le saut net entre deux lignes actives (aucune animation attendue à ce stade — c'est le sujet de la leçon suivante).</li>
+      <li>Quitte l'écran Découvrir puis reviens dessus : les paroles doivent redémarrer proprement depuis le début (nouveau <code>startDate</code>), pas reprendre un vieux minuteur.</li>
+      <li>Change temporairement <code>by: 0.1</code> en <code>by: 1.0</code> : le défilement doit devenir visiblement plus saccadé, une image par seconde plutôt que dix — puis remets <code>0.1</code>.</li>
+      <li>Ajoute temporairement un <code>print(Date())</code> dans le bloc <code>.task</code> de chargement de la police, rebuild, vérifie dans la console qu'il ne s'affiche qu'<strong>une seule fois</strong> malgré les dizaines de ticks qui suivent — puis retire-le.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>.task(id: displayScale)</code> : un seul rendu, figé</td><td><code>TimelineView(.periodic(from:by:))</code> : un rendu toutes les 0,1 seconde</td></tr>
+    <tr><td><code>currentTime</code> codé en dur (<code>2.5</code>)</td><td><code>currentTime</code> calculé depuis <code>startDate</code>, avance réellement</td></tr>
+    <tr><td>Police relue depuis le disque à chaque appel de <code>render()</code></td><td><code>fontData</code> mis en cache dans <code>@State</code>, lu une seule fois</td></tr>
+    <tr><td>Changement de <code>displayScale</code> : nécessite <code>.task(id:)</code> explicite</td><td>Pris en compte automatiquement au tick suivant</td></tr>
+    <tr><td>La ligne active ne change jamais sans intervention manuelle</td><td>La ligne active change seule, avec un saut net (sans lissage — Leçon suivante)</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://developer.apple.com/documentation/swiftui/timelineview">Apple Developer Documentation — TimelineView</a> — API, contexte de rendu, cas d'usage recommandés.<br>
+    <a href="https://developer.apple.com/documentation/swiftui/timelineschedule/periodic(from:by:)">Apple Developer Documentation — TimelineSchedule.periodic(from:by:)</a> — sémantique exacte de l'intervalle et de l'origine.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi TimelineView(.periodic(from:by:)) remplace-t-il .task(id: displayScale) comme déclencheur principal du rendu ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce que .task(id:) est dépréciée depuis iOS 26 au profit de TimelineView pour tout contenu qui dépend de l'environnement</label>
+    <label><input type="radio" name="q1" value="b"> Parce que TimelineView est le seul type SwiftUI capable d'appeler une fonction statique retournant un CGImage</label>
+    <label><input type="radio" name="q1" value="c"> .task(id: displayScale) ne se redéclenche que si displayScale change, jamais parce que le temps avance — TimelineView, lui, réexécute sa closure de contenu à intervalles réguliers, avec un context.date à jour à chaque fois, ce qui est exactement ce qu'il faut pour faire avancer currentTime</label>
+    <label><input type="radio" name="q1" value="d"> Parce que displayScale ne peut être lu qu'à l'intérieur d'un TimelineView, jamais dans un .task classique</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Pourquoi @State private var startDate = Date() est-elle nécessaire, plutôt qu'une simple propriété let startDate = Date() ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce que Date() n'est pas thread-safe et doit obligatoirement être encapsulée dans un property wrapper pour être lue depuis TimelineView</label>
+    <label><input type="radio" name="q2" value="b"> Une View SwiftUI est une struct reconstruite à chaque redessin de son parent, pour des raisons souvent sans rapport avec EngineProofView elle-même — une propriété let ordinaire serait réévaluée à chaque reconstruction, redonnant un "maintenant" différent à chaque fois, alors que @State stocke la valeur en dehors de la struct et la conserve entre les reconstructions</label>
+    <label><input type="radio" name="q2" value="c"> Parce que TimelineView exige explicitement que son paramètre from: soit annoté @State, sous peine d'erreur de compilation</label>
+    <label><input type="radio" name="q2" value="d"> Parce que let interdirait toute lecture de startDate à l'intérieur de la closure de contenu de TimelineView</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">3. Pourquoi mettre fontData (les octets bruts) en cache dans @State, plutôt que d'appeler Bundle.main.url(...) et Data(contentsOf:) à chaque tick de TimelineView ?</p>
+    <label><input type="radio" name="q3" value="a"> À dix exécutions par seconde, relire un fichier depuis le disque à chaque tick est un vrai gâchis répété pour un contenu qui ne change jamais après le premier chargement — Data est un type Swift ordinaire, entièrement copiable, donc sans obstacle à le conserver dans @State</label>
+    <label><input type="radio" name="q3" value="b"> Parce que Bundle.main.url(forResource:withExtension:) ne peut techniquement être appelée qu'une seule fois par lancement de l'app</label>
+    <label><input type="radio" name="q3" value="c"> Parce que Data(contentsOf:) est asynchrone et ne peut pas être appelée depuis la closure de contenu d'un TimelineView</label>
+    <label><input type="radio" name="q3" value="d"> Parce que sans ce cache, stbtt_InitFont échouerait après le premier appel, la police étant marquée comme déjà chargée en interne</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">4. Pourquoi karamock.Font reste-t-il reconstruit à chaque tick dans render(), alors que fontData (les octets dont il est fait) est mis en cache ?</p>
+    <label><input type="radio" name="q4" value="a"> Parce que loadFromMemory ne peut être appelée qu'une seule fois par instance de Font, avant d'être définitivement verrouillée</label>
+    <label><input type="radio" name="q4" value="b"> Parce que garder Font en dehors de render() ferait fuir la mémoire allouée par stb_truetype à chaque nouveau tick</label>
+    <label><input type="radio" name="q4" value="c"> Parce que TimelineView réinitialise automatiquement toute variable locale à une fonction statique entre deux ticks, y compris celles capturées par closure</label>
+    <label><input type="radio" name="q4" value="d"> Font interdit explicitement sa copie depuis la Leçon 38 (copie supprimée, pour empêcher deux Font de pointer vers les mêmes octets) — un type C++ move-only se prête mal au stockage @State de SwiftUI, donc la leçon met en cache les octets copiables plutôt que l'objet Font lui-même</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">5. Pourquoi le .task(id: displayScale) explicite des Leçons 37 à 39 n'est-il plus nécessaire dans cette leçon ?</p>
+    <label><input type="radio" name="q5" value="a"> Parce que displayScale ne change jamais après la Leçon 39, une fois l'app buildée pour un simulateur donné</label>
+    <label><input type="radio" name="q5" value="b"> content(at:) lit displayScale depuis l'environnement à chaque tick de TimelineView, comme n'importe quelle autre valeur utilisée dans body — un changement d'échelle est donc pris en compte automatiquement au tick suivant, sans déclencheur dédié</label>
+    <label><input type="radio" name="q5" value="c"> Parce que TimelineView désactive automatiquement toute lecture de @Environment à l'intérieur de sa closure de contenu</label>
+    <label><input type="radio" name="q5" value="d"> Parce que CGImage ignore désormais le paramètre scale depuis la Leçon 39, rendant ce déclencheur inutile</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">6. Pourquoi LyricsStore, PixelBuffer, TextRenderer et LyricsPage restent-ils reconstruits à chaque tick sans mise en cache, contrairement à fontData ?</p>
+    <label><input type="radio" name="q6" value="a"> Parce qu'aucun de ces quatre types n'est utilisable plus d'une fois par instance, par construction</label>
+    <label><input type="radio" name="q6" value="b"> Parce que SwiftUI interdit de stocker plus d'une propriété @State par View, et fontData occupait déjà ce seul emplacement disponible</label>
+    <label><input type="radio" name="q6" value="c"> Leur construction ne coûte ni lecture disque ni rastérisation de glyphe tant que drawText n'est pas appelée — bon marché à l'échelle de trois lignes de test ; contrairement à la lecture disque de la police, ce n'est pas une dépense qu'il valait la peine d'éliminer dans cette leçon</label>
+    <label><input type="radio" name="q6" value="d"> Parce que ces quatre types, contrairement à Font, ne peuvent pas être passés par référence à LyricsPage::render</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">7. Pourquoi choisir by: 0.1 (10 Hz) pour .periodic plutôt qu'un intervalle plus court, proche de 60 images par seconde ?</p>
+    <label><input type="radio" name="q7" value="a"> Chaque tick relance une rastérisation logicielle complète (glyphe par glyphe, établi en Leçon 38), pas un simple changement de propriété SwiftUI — 10 Hz suffit largement à voir la ligne active changer sans à-coup perceptible dans ce rendu, sans payer le coût d'une rastérisation à 60 images par seconde pour un contenu qui ne bouge pas encore de façon continue (pas d'interpolation avant la leçon suivante)</label>
+    <label><input type="radio" name="q7" value="b"> Parce que TimelineView refuse tout intervalle inférieur à 0,1 seconde par sécurité, quelle que soit la plateforme ciblée</label>
+    <label><input type="radio" name="q7" value="c"> Parce que stbtt_MakeCodepointBitmap impose un délai minimal de 100 millisecondes entre deux appels consécutifs sur la même police</label>
+    <label><input type="radio" name="q7" value="d"> Parce qu'un intervalle plus court ferait dépasser la limite de taille du buffer PixelBuffer telle que définie en Leçon 37</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le défilement automatique fonctionne, mais l'image semble clignoter légèrement à chaque tick plutôt que de se mettre à jour proprement ? Vérifie d'abord que <code>content(at:)</code> ne recrée pas un nouveau <code>ProgressView()</code> entre deux images valides (le <code>if let fontData, let image = ...</code> doit rester dans une seule branche stable) avant de creuser plus loin — pose la question avec une capture d'écran si le clignotement persiste après cette vérification.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0039-paroles-plusieurs-lignes-mise-en-page.html">← Leçon 39 : les vraies paroles, plusieurs lignes, mise en page</a></span>
+    <span>Leçon suivante : à venir (transition lissée entre les lignes)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
