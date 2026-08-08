@@ -13,7 +13,7 @@ struct EngineProofView: View {
     @Environment(\.displayScale) private var displayScale
     @State private var image: CGImage?
     
-    private let pointSize = CGSize(width: 240, height: 135)
+    private let pointSize = CGSize(width: 320, height: 200)
     
     var body: some View {
         Group {
@@ -45,10 +45,20 @@ struct EngineProofView: View {
         buffer.resize(Int32(pixelWidth), Int32(pixelHeight))
         buffer.fill(20, 20, 30)
         
-        var renderer = karamock.TextRenderer()
-        let color = karamock.Color(r: 240, g:240, b: 245)
-        renderer.drawText(&buffer, font, std.string("Karamock is awesome"), 20, Int32(pixelHeight / 2), 48, color)
+        var lyricsStore = karamock.LyricsStore()
+        let testLines: [(time: Double, text: String)] = [
+            (0.0, "Premiere ligne, deja terminee"),
+            (2.0, "Deuxieme ligne, celle qui joue maintenant"),
+            (4.0, "Troisieme ligne, pas encore arrivee")
+        ]
+        lyricsStore.reserve(testLines.count)
+        for line in testLines {
+            lyricsStore.addLine(line.time, std.string(line.text))
+        }
         
+        var renderer = karamock.TextRenderer()
+        let page = karamock.LyricsPage()
+        page.render(&buffer, font, &renderer, lyricsStore, 2.5)
         
         guard let base = buffer.__dataUnsafe() else { return nil }
         let pixels = Data(bytes: base, count: buffer.sizeInBytes())

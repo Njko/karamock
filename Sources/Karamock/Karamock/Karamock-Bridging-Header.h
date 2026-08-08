@@ -7,3 +7,4 @@
 #include "Engine/PixelBuffer.hpp"
 #include "Engine/Font.hpp"
 #include "Engine/TextRenderer.hpp"
+#include "Engine/LyricsPage.hpp"
