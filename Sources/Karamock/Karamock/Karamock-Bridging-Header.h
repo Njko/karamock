@@ -4,3 +4,4 @@
 //
 
 #include "Engine/LyricsStore.hpp"
+#include "Engine/PixelBuffer.hpp"
