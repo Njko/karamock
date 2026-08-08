@@ -11,32 +11,36 @@ import SwiftUI
 
 struct EngineProofView: View {
     @Environment(\.displayScale) private var displayScale
-    @State private var image: CGImage?
+    @State private var startDate = Date()
+    @State private var fontData: Data?
     
     private let pointSize = CGSize(width: 320, height: 200)
     
     var body: some View {
-        Group {
-            if let image {
-                Image(decorative: image, scale: displayScale)
-                    .interpolation(.none)
-            } else {
-                ProgressView()
-            }
+        TimelineView(.periodic(from: startDate, by: 0.1)) { context in
+            content(at: context.date)
+                .frame(width: pointSize.width, height: pointSize.height)
         }
-        .frame(width: pointSize.width, height: pointSize.height)
-        .task (id: displayScale) {
-            image = Self.render(pointSize: pointSize, scale: displayScale)
+        .task {
+            guard fontData == nil else { return }
+            guard let fontURL = Bundle.main.url(forResource: "NotoSans-Regular", withExtension: "ttf") else { return }
+            fontData = try? Data(contentsOf: fontURL)
         }
     }
     
-    private static func render(pointSize: CGSize, scale: CGFloat) -> CGImage? {
+    @ViewBuilder
+    private func content(at date: Date) -> some View {
+        if let fontData, let image = Self.render(pointSize: pointSize, scale: displayScale, fontData: fontData, currentTime: date.timeIntervalSince(startDate)) {
+            Image(decorative: image, scale: displayScale)
+                .interpolation(.none)
+        } else {
+            ProgressView()
+        }
+    }
+    
+    private static func render(pointSize: CGSize, scale: CGFloat, fontData: Data, currentTime: Double) -> CGImage? {
         let pixelWidth: Int = Int((pointSize.width * scale).rounded())
         let pixelHeight: Int = Int((pointSize.height * scale).rounded())
-        
-        guard let fontURL = Bundle.main.url(forResource: "NotoSans-Regular", withExtension: "ttf"),
-              let fontData = try? Data(contentsOf: fontURL)
-        else { return nil }
         
         var font = karamock.Font()
         guard loadFont(from: fontData, into: &font) else { return nil }
@@ -58,7 +62,7 @@ struct EngineProofView: View {
         
         var renderer = karamock.TextRenderer()
         let page = karamock.LyricsPage()
-        page.render(&buffer, font, &renderer, lyricsStore, 2.5)
+        page.render(&buffer, font, &renderer, lyricsStore, currentTime)
         
         guard let base = buffer.__dataUnsafe() else { return nil }
         let pixels = Data(bytes: base, count: buffer.sizeInBytes())
