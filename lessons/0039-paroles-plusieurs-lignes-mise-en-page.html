@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 39 — Les vraies paroles, plusieurs lignes, mise en page</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 39 · Moteur de paroles en C++ (3/N)</p>
+  <h1>Les vraies paroles, plusieurs lignes, mise en page</h1>
+  <p class="subtitle">La Leçon 36 a envoyé la collection de paroles horodatées vers <code>LyricsStore</code>. Les Leçons 37 et 38 ont prouvé que le C++ peut dessiner du texte lisible dans le buffer. Aucune de ces trois briques ne parle encore à l'autre : <code>LyricsStore</code> ne sait pas rendre ce qu'il contient, et <code>TextRenderer</code> ne dessine qu'une seule ligne fixe, choisie à la main. Cette leçon les assemble : trouver la ligne active pour un instant donné, puis afficher plusieurs lignes centrées, la ligne en cours mise en avant, celles d'avant et d'après en retrait — la mise en page qu'on reconnaît dans un karaoké. Toujours pas d'animation ni de défilement fluide : c'est un instantané, à un <code>currentTime</code> fixe. Le mouvement viendra dans une leçon dédiée.</p>
+
+  <h2>LyricsStore ne sait encore que compter et dater</h2>
+  <p>Relire ce que <code>LyricsStore</code> expose depuis la Leçon 36 :</p>
+  <pre><code>// Engine/LyricsStore.hpp — état avant cette leçon
+std::size_t lineCount() const;
+double timeAt(std::size_t index) const;</code></pre>
+  <p><code>addLine(time, text)</code> pousse une ligne dedans, mais rien ne permet de la relire : <code>timeAt</code> redonne l'horodatage, jamais le texte. Le test de la Leçon 36 (<code>assert(lyricsStore.lineCount() == lyrics.count)</code>) vérifiait que les paroles étaient bien arrivées côté C++ — pas qu'on pouvait s'en resservir pour les afficher. C'est le trou à combler en premier, avant même de parler de mise en page :</p>
+  <pre><code>// CORRECTION — Engine/LyricsStore.hpp
+#pragma once
+#include &lt;cstddef&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+namespace karamock {
+
+struct LyricLine {
+    double time;
+    std::string text;
+};
+
+class LyricsStore {
+public:
+    static constexpr std::size_t npos = static_cast&lt;std::size_t&gt;(-1);   // NOUVEAU
+
+    LyricsStore() = default;
+    void reserve(std::size_t count);
+    void addLine(double time, const std::string&amp; text);   // précondition : appelée avec des `time` croissants
+    void clear();
+
+    std::size_t lineCount() const;
+    double timeAt(std::size_t index) const;
+    const std::string&amp; textAt(std::size_t index) const;   // NOUVEAU
+
+    std::size_t indexAtTime(double time) const;   // NOUVEAU — npos si aucune ligne n'est encore active
+private:
+    std::vector&lt;LyricLine&gt; lines_;
+};
+
+} // namespace karamock</code></pre>
+  <p><code>npos</code> reprend délibérément le nom et la convention de <code>std::string::npos</code> : un sentinel du même type que l'index qu'il représente (<code>std::size_t</code>), plutôt qu'un <code>int</code> signé à -1 qui obligerait à un cast à chaque comparaison, ou un <code>std::optional&lt;std::size_t&gt;</code> qui ajouterait une indirection pour un cas que la bibliothèque standard résout déjà par convention.</p>
+
+  <h2>Trouver la ligne active : indexAtTime</h2>
+  <p><code>indexAtTime</code> répond à une question précise : "à cet instant, quelle est la dernière ligne dont l'horodatage est déjà passé ?" C'est exactement ce que <code>std::upper_bound</code> calcule — à condition que les lignes soient triées par <code>time</code> croissant, ce que <code>addLine</code> suppose sans jamais le vérifier lui-même jusqu'ici :</p>
+  <pre><code>// CORRECTION — Engine/LyricsStore.cpp
+#include "LyricsStore.hpp"
+#include &lt;algorithm&gt;
+#include &lt;cassert&gt;
+
+namespace karamock {
+
+void LyricsStore::reserve(std::size_t count) {
+    lines_.reserve(count);
+}
+
+void LyricsStore::addLine(double time, const std::string &amp;text) {
+    assert(lines_.empty() || time &gt;= lines_.back().time);   // NOUVEAU — indexAtTime suppose l'ordre croissant
+    lines_.push_back(LyricLine{time, text});
+}
+
+void LyricsStore::clear() {
+    lines_.clear();
+}
+
+std::size_t LyricsStore::lineCount() const {
+    return lines_.size();
+}
+
+double LyricsStore::timeAt(std::size_t index) const {
+    return lines_[index].time;
+}
+
+const std::string&amp; LyricsStore::textAt(std::size_t index) const {   // NOUVEAU
+    return lines_[index].text;
+}
+
+std::size_t LyricsStore::indexAtTime(double time) const {   // NOUVEAU
+    if (lines_.empty() || time &lt; lines_.front().time) {
+        return npos;
+    }
+    const auto it = std::upper_bound(lines_.begin(), lines_.end(), time,
+        [](double t, const LyricLine&amp; line) { return t &lt; line.time; });
+    return static_cast&lt;std::size_t&gt;(it - lines_.begin() - 1);
+}
+
+} // namespace karamock</code></pre>
+  <p>Deux gardes-fous distincts, à ne pas confondre. L'<code>assert</code> dans <code>addLine</code> est une vérification en <strong>écriture</strong> — elle protège la précondition d'<code>indexAtTime</code> le plus tôt possible, au moment où une ligne mal ordonnée est ajoutée, plutôt que de laisser un résultat silencieusement faux apparaître bien plus tard à l'affichage. La garde <code>time &lt; lines_.front().time</code> dans <code>indexAtTime</code> est une vérification en <strong>lecture</strong> : sans elle, demander l'index actif avant que la première ligne n'ait commencé renverrait <code>0</code> — une ligne "active" avant même son propre horodatage, un bug silencieux plutôt qu'un crash. <code>upper_bound</code> retourne un itérateur sur la <em>première</em> ligne dont le <code>time</code> dépasse strictement l'instant cherché ; reculer d'un cran (<code>- 1</code>) donne la <em>dernière</em> ligne déjà commencée, exactement la définition de "ligne active".</p>
+
+  <h2>LyricsPage : le moteur décide qui afficher, où, et comment</h2>
+  <p>Une nouvelle classe compose les trois briques existantes plutôt que d'ajouter cette logique dans <code>TextRenderer</code> (qui ne doit rien savoir des paroles) ou dans <code>LyricsStore</code> (qui ne doit rien savoir du dessin) :</p>
+  <pre><code>// NOUVEAU — Engine/LyricsPage.hpp
+#pragma once
+
+namespace karamock {
+
+class Font;
+class PixelBuffer;
+class TextRenderer;
+class LyricsStore;
+
+class LyricsPage {
+public:
+    void render(PixelBuffer&amp; target, const Font&amp; font, TextRenderer&amp; renderer,
+                const LyricsStore&amp; lyrics, double currentTime) const;
+};
+
+} // namespace karamock</code></pre>
+  <pre><code>// NOUVEAU — Engine/LyricsPage.cpp
+#include "LyricsPage.hpp"
+#include "Font.hpp"
+#include "PixelBuffer.hpp"
+#include "TextRenderer.hpp"
+#include "LyricsStore.hpp"
+
+namespace karamock {
+
+namespace {
+
+Color dim(Color c) {
+    return Color{
+        static_cast&lt;std::uint8_t&gt;(c.r / 3),
+        static_cast&lt;std::uint8_t&gt;(c.g / 3),
+        static_cast&lt;std::uint8_t&gt;(c.b / 3)
+    };
+}
+
+void drawCentered(PixelBuffer&amp; target, const Font&amp; font, TextRenderer&amp; renderer,
+                   const std::string&amp; text, int baselineY, float pixelHeight, Color color) {
+    const int width = renderer.measureWidth(font, text, pixelHeight);
+    const int x = (target.width() - width) / 2;
+    renderer.drawText(target, font, text, x, baselineY, pixelHeight, color);
+}
+
+} // namespace
+
+void LyricsPage::render(PixelBuffer&amp; target, const Font&amp; font, TextRenderer&amp; renderer,
+                         const LyricsStore&amp; lyrics, double currentTime) const {
+    const std::size_t active = lyrics.indexAtTime(currentTime);
+    if (active == LyricsStore::npos) {
+        return;   // rien avant la première ligne
+    }
+
+    constexpr float activeHeight = 56.0f;
+    constexpr float sideHeight = 32.0f;
+    const Color activeColor{240, 240, 245};
+    const Color sideColor = dim(activeColor);
+
+    int ascent = 0, descent = 0, lineGap = 0;
+    font.verticalMetrics(&amp;ascent, &amp;descent, &amp;lineGap);
+    const float lineAdvance = (ascent - descent + lineGap) * font.scaleForPixelsHeight(activeHeight);
+
+    const int centerY = target.height() / 2;
+    drawCentered(target, font, renderer, lyrics.textAt(active), centerY, activeHeight, activeColor);
+
+    if (active &gt; 0) {
+        drawCentered(target, font, renderer, lyrics.textAt(active - 1),
+                     centerY - static_cast&lt;int&gt;(lineAdvance), sideHeight, sideColor);
+    }
+    if (active + 1 &lt; lyrics.lineCount()) {
+        drawCentered(target, font, renderer, lyrics.textAt(active + 1),
+                     centerY + static_cast&lt;int&gt;(lineAdvance), sideHeight, sideColor);
+    }
+}
+
+} // namespace karamock</code></pre>
+  <p><code>Font::verticalMetrics</code> existe depuis la Leçon 38 mais n'y était jamais appelée — elle sert enfin ici : <code>ascent - descent + lineGap</code> est la distance verticale standard entre deux lignes de base consécutives dans une police, mise à l'échelle par <code>scaleForPixelsHeight</code> comme n'importe quelle autre mesure de la police. Un écart fixe en pixels aurait fonctionné pour une seule combinaison de tailles, mais serait devenu trop serré ou trop large dès que <code>activeHeight</code> ou <code>sideHeight</code> changerait — ce calcul s'adapte à la police et à la taille réellement utilisées, pas à une valeur choisie à l'œil pour ce cas précis.</p>
+  <p><code>drawCentered</code> appelle <code>measureWidth</code> avant <code>drawText</code>, jamais l'inverse : la position <code>x</code> de départ dépend de la largeur totale du texte, connue seulement une fois tous les glyphes parcourus. <code>measureWidth</code> refait ce même calcul d'avancement sans rastériser un seul pixel (établi en Leçon 38) — le prix de ce double parcours est un calcul de plus par ligne, pas un dessin de plus.</p>
+  <p>Ligne courante en <code>TextRenderer&amp;</code> non-const, <code>LyricsStore</code> en <code>const&amp;</code> : <code>TextRenderer</code> mute <code>glyphScratch_</code>, son buffer de travail interne, à chaque glyphe dessiné — un état réel qui change. <code>LyricsStore</code> n'est jamais modifié pendant le rendu, seulement lu via <code>textAt</code>, <code>indexAtTime</code> et <code>lineCount</code> ; la <code>const&amp;</code> documente cette garantie autant qu'elle l'impose.</p>
+  <p>Si la ligne active n'existe pas encore (<code>active == 0</code>, pas de ligne précédente) ou si elle est la dernière (pas de ligne suivante), les deux <code>if</code> l'excluent proprement plutôt que de tenter <code>textAt(active - 1)</code> avec un index qui, en arithmétique non signée, "déborderait" vers une valeur énorme au lieu de devenir négatif.</p>
+
+  <h2>Côté Swift : des paroles de test, plusieurs lignes, un instant choisi</h2>
+  <pre><code>// CORRECTION — Views/Discovery/EngineProofView.swift
+struct EngineProofView: View {
+    @Environment(\.displayScale) private var displayScale
+    @State private var image: CGImage?
+
+    private let pointSize = CGSize(width: 320, height: 200)   // agrandi : trois lignes, plus une seule
+
+    // ... body inchangé depuis la Leçon 38 ...
+
+    private static func render(pointSize: CGSize, scale: CGFloat) -> CGImage? {
+        let pixelWidth  = Int((pointSize.width  * scale).rounded())
+        let pixelHeight = Int((pointSize.height * scale).rounded())
+
+        guard let fontURL = Bundle.main.url(forResource: "NotoSans-Regular", withExtension: "ttf"),
+              let fontData = try? Data(contentsOf: fontURL)
+        else { return nil }
+
+        var font = karamock.Font()
+        guard loadFont(from: fontData, into: &amp;font) else { return nil }
+
+        var buffer = karamock.PixelBuffer()
+        buffer.resize(Int32(pixelWidth), Int32(pixelHeight))
+        buffer.fill(20, 20, 30)
+
+        var lyricsStore = karamock.LyricsStore()
+        let testLines: [(time: Double, text: String)] = [
+            (0.0, "Premiere ligne, deja terminee"),
+            (2.0, "Deuxieme ligne, celle qui joue maintenant"),
+            (4.0, "Troisieme ligne, pas encore arrivee")
+        ]
+        lyricsStore.reserve(testLines.count)
+        for line in testLines {
+            lyricsStore.addLine(line.time, std.string(line.text))
+        }
+
+        var renderer = karamock.TextRenderer()
+        let page = karamock.LyricsPage()
+        page.render(&amp;buffer, font, &amp;renderer, lyricsStore, 2.5)   // entre la 2e et la 3e ligne : la 2e est active
+
+        guard let base = buffer.__dataUnsafe() else { return nil }
+        let pixels = Data(bytes: base, count: buffer.sizeInBytes())
+
+        guard let provider = CGDataProvider(data: pixels as CFData),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+        else { return nil }
+
+        let bitmapInfo = CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                    | CGImageByteOrderInfo.order32Big.rawValue
+        )
+
+        return CGImage(
+            width: Int(buffer.width()), height: Int(buffer.height()),
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: Int(buffer.bytesPerRow()),
+            space: colorSpace, bitmapInfo: bitmapInfo, provider: provider,
+            decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        )
+    }
+
+    private static func loadFont(from data: Data, into font: inout karamock.Font) -> Bool {
+        data.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                return false
+            }
+            return font.loadFromMemory(baseAddress, rawBuffer.count)
+        }
+    }
+}</code></pre>
+  <p><code>2.5</code> passé directement, sans cast, à un paramètre C++ <code>double currentTime</code> : contrairement à <code>baselineY</code> (<code>Int32</code>) en Leçon 38, un <code>Double</code> Swift correspond directement au <code>double</code> C++ des deux côtés de l'interop, littéral ou non — <code>line.time</code>, une propriété <code>Double</code> non littérale, traverse déjà la frontière sans cast dans <code>FullScreenPlayerViewModel.sendLyricsToEngine()</code> depuis la Leçon 36. Rien à ajouter ici, seulement à remarquer que ce n'est pas systématique : la règle du cast explicite ne s'applique qu'aux types entiers de largeur fixe comme <code>Int</code>/<code>Int32</code>, pas aux types à virgule flottante.</p>
+  <p>Les trois lignes de test évitent volontairement tout accent (<code>é</code>, <code>è</code>, <code>à</code>) — pas un hasard. <code>TextRenderer::drawText</code> itère <code>text[k]</code> comme un octet unique (<code>static_cast&lt;unsigned char&gt;</code>) et traite <code>text.size()</code> comme un nombre de glyphes. Un caractère accentué encodé en UTF-8 tient sur plusieurs octets : chacun serait rastérisé séparément comme un glyphe invalide, produisant un résultat visuellement cassé plutôt qu'un crash. Un vrai problème pour un karaoké en français, volontairement laissé de côté : le moteur ne gère aujourd'hui que de l'ASCII, l'Unicode viendra dans une leçon dédiée plutôt que d'être traité en passant ici.</p>
+  <pre><code>// Bridging header — un seul ajout
+#include "Engine/LyricsPage.hpp"</code></pre>
+
+  <div class="mission-tie">
+    <strong>État réel de l'implémentation (comparé le 8 août 2026) :</strong> <code>LyricsStore::textAt</code>/<code>indexAtTime</code>/<code>npos</code>, <code>LyricsPage</code> et l'ajout au bridging header correspondent exactement à ce qu'enseigne cette leçon, y compris l'<code>assert</code> de précondition dans <code>addLine</code>. Un seul écart, sans rapport avec le sujet de cette leçon : <code>EngineProofView</code> charge la police via un <code>loadFont(from:into:)</code> extrait en méthode privée plutôt que la fermeture <code>withUnsafeBytes</code> écrite en ligne comme le montrait la Leçon 38 — présent depuis l'implémentation de la Leçon 38 elle-même, jamais reflété dans aucune des deux leçons jusqu'ici. Comportement strictement identique, corrigé ci-dessus par cohérence.
+  </div>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build (⌘B) sur un simulateur iPhone <strong>et</strong> un simulateur Apple TV.</li>
+      <li>Ouvre l'écran Découvrir : trois lignes doivent apparaître, celle du centre nettement plus grande et plus claire que les deux autres.</li>
+      <li>Change le <code>2.5</code> passé à <code>page.render</code> pour <code>-1.0</code> : aucune ligne ne doit plus apparaître (avant la première, <code>indexAtTime</code> renvoie <code>npos</code>).</li>
+      <li>Change-le pour <code>10.0</code> (après la dernière ligne) : la troisième ligne doit rester active et centrée, sans ligne "suivante" en dessous.</li>
+      <li>Ajoute temporairement un accent à une des trois chaînes de test, rebuild, observe le glyphe cassé qui en résulte — puis retire-le. La leçon suivante traitera ce cas, pas celle-ci.</li>
+      <li>Retire temporairement le <code>- 1</code> dans <code>indexAtTime</code> pour observer le décalage d'une ligne qui en résulte, puis remets-le.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>LyricsStore</code> : écriture seule, texte jamais relisible</td><td><code>textAt()</code> et <code>indexAtTime()</code> — la ligne active peut être trouvée et relue</td></tr>
+    <tr><td>Une seule chaîne fixe, dessinée à une position choisie à la main</td><td><code>LyricsPage</code> : plusieurs lignes, centrées, la ligne active mise en avant</td></tr>
+    <tr><td><code>Font::verticalMetrics</code> définie mais jamais appelée</td><td>utilisée pour espacer les lignes selon la police réelle</td></tr>
+    <tr><td>Le buffer affiche "Karamock" en dur</td><td>Le buffer affiche trois lignes de paroles de test, la bonne mise en avant selon <code>currentTime</code></td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://en.cppreference.com/w/cpp/algorithm/upper_bound">cppreference — std::upper_bound</a> — sémantique exacte, complexité, comparateur hétérogène.<br>
+    <a href="https://en.cppreference.com/w/cpp/string/basic_string/npos">cppreference — std::string::npos</a> — la convention de sentinel reprise pour <code>LyricsStore::npos</code>.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">1. Pourquoi LyricsStore gagne-t-il textAt(index) dans cette leçon, alors que timeAt(index) existait déjà depuis la Leçon 36 ?</p>
+    <label><input type="radio" name="q1" value="a"> Jusqu'ici seul l'horodatage de chaque ligne pouvait être relu côté C++ — le texte poussé par addLine n'avait aucun accesseur, donc rien ne pouvait effectivement afficher les paroles reçues, seulement vérifier leur nombre et leur horodatage</label>
+    <label><input type="radio" name="q1" value="b"> Parce que std::vector&lt;LyricLine&gt; ne permet pas d'accéder au champ time sans passer par un accesseur dédié pour chaque champ de la struct</label>
+    <label><input type="radio" name="q1" value="c"> Parce que l'interop Swift/C++ interdit de lire deux champs différents d'un même élément de collection sans deux fonctions séparées</label>
+    <label><input type="radio" name="q1" value="d"> Parce que timeAt() était en réalité un bug de la Leçon 36, corrigé ici en le remplaçant par un accesseur unique</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">2. Pourquoi indexAtTime retourne-t-il npos plutôt que 0 quand currentTime est antérieur à la première ligne ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce que std::upper_bound ne peut techniquement pas retourner un itérateur pointant sur le tout premier élément d'un vector</label>
+    <label><input type="radio" name="q2" value="b"> Parce que 0 est déjà réservé pour signaler une collection vide, indépendamment de la valeur de currentTime</label>
+    <label><input type="radio" name="q2" value="c"> 0 désignerait la première ligne comme "active" avant même son propre timestamp — un résultat faux mais silencieux, alors que npos signale sans ambiguïté qu'aucune ligne n'est encore active</label>
+    <label><input type="radio" name="q2" value="d"> Parce que LyricsPage::render plante si indexAtTime retourne jamais 0 en tout début de lecture</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">3. Pourquoi indexAtTime s'appuie-t-il sur std::upper_bound plutôt que sur une boucle linéaire testant chaque timeAt(i) ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce qu'une boucle linéaire ne compilerait pas avec le mode d'interop objcxx activé pour ce projet</label>
+    <label><input type="radio" name="q3" value="b"> Parce que la précondition (lignes triées par time croissant, imposée par addLine) permet une recherche en O(log n) plutôt qu'un parcours en O(n), en réutilisant un algorithme standard déjà testé plutôt qu'une boucle écrite à la main</label>
+    <label><input type="radio" name="q3" value="c"> Parce que std::vector interdit l'accès par index dans une boucle for classique en C++20</label>
+    <label><input type="radio" name="q3" value="d"> Parce qu'une boucle linéaire ne pourrait pas retourner npos en cas de collection vide</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">4. Pourquoi Font::verticalMetrics, introduite en Leçon 38 mais jamais appelée jusqu'ici, sert-elle maintenant à espacer les lignes plutôt qu'un écart fixe en pixels ?</p>
+    <label><input type="radio" name="q4" value="a"> Parce qu'un écart fixe en pixels ne pourrait techniquement pas être calculé avant que la police ne soit chargée en mémoire</label>
+    <label><input type="radio" name="q4" value="b"> Parce que stb_truetype refuse de rastériser un glyphe si l'espacement vertical n'a pas été mesuré au préalable via verticalMetrics</label>
+    <label><input type="radio" name="q4" value="c"> Parce que le calcul ascent - descent + lineGap est obligatoire pour que blendPixel accepte des coordonnées y négatives</label>
+    <label><input type="radio" name="q4" value="d"> L'espacement vertical typographique dépend de la police et de la taille de rendu utilisées — un écart fixe conviendrait à une seule combinaison de tailles, mais deviendrait trop serré ou trop large dès qu'activeHeight ou sideHeight changerait</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">5. Pourquoi drawCentered appelle-t-il measureWidth avant drawText, plutôt que de centrer le texte pendant qu'il se dessine ?</p>
+    <label><input type="radio" name="q5" value="a"> La position x de départ dépend de la largeur totale du texte, connue seulement une fois tous les glyphes parcourus — measureWidth refait ce calcul d'avancement sans rastériser, établi en Leçon 38 précisément pour ce genre de besoin</label>
+    <label><input type="radio" name="q5" value="b"> Parce que TextRenderer::drawText ne peut pas être appelée deux fois de suite sur le même PixelBuffer sans réinitialisation intermédiaire</label>
+    <label><input type="radio" name="q5" value="c"> Parce que glyphScratch_ doit être vidé par measureWidth avant que drawText ne puisse l'utiliser à nouveau</label>
+    <label><input type="radio" name="q5" value="d"> Parce que centrer pendant le dessin nécessiterait de connaître la largeur du PixelBuffer avant sa création</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">6. Pourquoi LyricsPage::render prend-elle TextRenderer par référence non-const mais LyricsStore par référence const ?</p>
+    <label><input type="radio" name="q6" value="a"> Par convention arbitraire du projet, sans lien avec l'état interne réel des deux classes</label>
+    <label><input type="radio" name="q6" value="b"> Parce que LyricsStore est plus volumineux en mémoire et bénéficie davantage d'un passage par référence constante que TextRenderer</label>
+    <label><input type="radio" name="q6" value="c"> TextRenderer mute glyphScratch_, son buffer de travail interne, à chaque glyphe dessiné — un état réel qui change ; LyricsStore n'est jamais modifié pendant le rendu, seulement lu via textAt, indexAtTime et lineCount</label>
+    <label><input type="radio" name="q6" value="d"> Parce que Swift n'autorise l'appel de méthodes C++ mutantes que si le paramètre précédent est explicitement const</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">7. Pourquoi les lignes de paroles de test dans EngineProofView évitent-elles volontairement tout accent (é, è, à) ?</p>
+    <label><input type="radio" name="q7" value="a"> Parce que stb_truetype ne contient tout simplement aucun glyphe accentué dans Noto Sans, quelle que soit la façon dont le texte est encodé</label>
+    <label><input type="radio" name="q7" value="b"> TextRenderer itère text[k] comme un octet unique et traite text.size() comme un nombre de glyphes — un caractère accentué en UTF-8 tient sur plusieurs octets, chacun rastérisé séparément comme un glyphe invalide, un vrai problème pour des paroles françaises volontairement laissé pour une leçon future</label>
+    <label><input type="radio" name="q7" value="c"> Parce que std::string refuse de stocker des caractères accentués sans une conversion explicite vers std::wstring au préalable</label>
+    <label><input type="radio" name="q7" value="d"> Parce que std.string(_:) côté Swift échoue silencieusement dès qu'une chaîne contient un caractère hors de la plage ASCII</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">La ligne active s'affiche bien mais déborde du cadre sur les bords gauche ou droit avec un texte de test plus long ? C'est attendu pour l'instant : LyricsPage centre le texte mais ne le découpe jamais s'il dépasse la largeur du buffer — blendPixel le protège d'un crash (les pixels hors bornes sont simplement ignorés, établi en Leçon 38), mais rien ne raccourcit ou ne redimensionne la ligne. Pose la question avec la longueur exacte de la ligne testée si un découpage te semble nécessaire avant la leçon qui traitera la mise en page plus en profondeur.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0038-texte-glyphes-stb-truetype.html">← Leçon 38 : du pixel au glyphe, le premier vrai texte</a></span>
+    <span>Leçon suivante : à venir (défilement, transitions entre lignes)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
