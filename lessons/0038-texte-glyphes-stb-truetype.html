@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 38 — Du pixel au glyphe : le premier vrai texte</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 38 · Moteur de paroles en C++ (2/N)</p>
+  <h1>Du pixel au glyphe : le premier vrai texte</h1>
+  <p class="subtitle">La Leçon 37 a prouvé que le buffer C++ arrive intact à l'écran — avec un dégradé et un damier, rien de lisible. Cette leçon fait apparaître du vrai texte, dessiné lettre par lettre en C++ pur, via <a href="https://github.com/nothings/stb">stb_truetype</a> (bibliothèque à un seul fichier, domaine public/MIT). Toujours minimal : une chaîne fixe ("Karamock"), pas encore les paroles réelles ni plusieurs lignes — ça viendra une fois ce mécanisme prouvé.</p>
+
+  <h2>stb_truetype : une bibliothèque, un seul fichier, une discipline à respecter</h2>
+  <p>Premier piège, avant même la licence : <a href="https://github.com/nothings/stb">nothings/stb</a> n'est pas un dépôt dédié à une seule bibliothèque. C'est <strong>un seul repo qui en contient une vingtaine</strong> (<code>stb_image.h</code>, <code>stb_vorbis.c</code>, <code>stb_truetype.h</code>, <code>stb_easy_font.h</code>...), toutes posées en vrac à la racine, sans sous-dossier par bibliothèque ni release packagée à télécharger. C'est précisément pour ça que le README ne donne aucune instruction d'intégration spécifique — chaque fichier est auto-documenté, le bloc <code>USAGE</code> en tête de fichier (cité plus bas) en tient lieu.</p>
+  <p>Ce qu'il faut récupérer : <strong>un seul fichier</strong>, <code>stb_truetype.h</code> — rien d'autre du repo, pas de clone, pas de gestionnaire de paquets. Deux façons de l'obtenir :</p>
+  <ol>
+    <li>Le fichier brut directement : <code>https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h</code> — ouvrir l'URL, Cmd+S pour l'enregistrer.</li>
+    <li>Depuis l'interface GitHub : ouvrir <code>github.com/nothings/stb</code>, cliquer sur <code>stb_truetype.h</code> dans la liste de fichiers, puis sur le bouton <strong>"Raw"</strong> en haut à droite du fichier affiché, puis Cmd+S.</li>
+  </ol>
+  <p>Le fichier obtenu, glisse-le dans Xcode, dans le dossier <code>Engine/ThirdParty/</code>, cible <code>Karamock</code> cochée. Aucune configuration de build supplémentaire n'est nécessaire pour ce <code>.h</code> en lui-même — seul <code>stb_truetype_impl.cpp</code> (créé plus bas, avec la macro) a besoin d'être compilé.</p>
+  <p><code>stb_truetype.h</code> est publié sous double licence, au choix du destinataire — le fichier source le dit lui-même, en toutes lettres :</p>
+  <blockquote>"This software is available under 2 licenses -- choose whichever you prefer. ALTERNATIVE A - MIT License [...] ALTERNATIVE B - Public Domain (www.unlicense.org)"</blockquote>
+  <p>Redistribution en app (App Store compris) sans restriction. Le fichier porte aussi un avertissement à prendre au sérieux plutôt qu'à ignorer :</p>
+  <blockquote>"NO SECURITY GUARANTEE -- DO NOT USE THIS ON UNTRUSTED FONT FILES. This library does no range checking of the offsets found in the file, meaning an attacker can use it to read arbitrary memory."</blockquote>
+  <p>Sans conséquence ici : Karamock n'embarque jamais qu'une police choisie par le projet lui-même, jamais un fichier fourni par l'utilisateur ou téléchargé au runtime.</p>
+  <p>C'est une bibliothèque "à un seul header" — tout le code est dans <code>stb_truetype.h</code>, activé par une macro qu'il faut poser avec discipline. Le fichier le documente ainsi :</p>
+  <blockquote>"Include this file in whatever places need to refer to it. In ONE C/C++ file, write: #define STB_TRUETYPE_IMPLEMENTATION before the #include of this file."</blockquote>
+  <p>Deux erreurs symétriques si cette règle n'est pas respectée à la lettre :</p>
+  <table class="compare-table">
+    <tr><th>Erreur</th><th>Symptôme au lien</th></tr>
+    <tr><td>La macro n'est définie dans <strong>aucun</strong> fichier</td><td><code>Undefined symbols for architecture arm64: "_stbtt_InitFont"</code> — seuls les prototypes existent</td></tr>
+    <tr><td>La macro est définie dans <strong>deux fichiers ou plus</strong></td><td><code>duplicate symbol '_stbtt_InitFont'</code> — le corps des fonctions est émis deux fois</td></tr>
+  </table>
+  <pre><code>// NOUVEAU — Engine/ThirdParty/stb_truetype_impl.cpp
+// Le seul fichier du projet à définir cette macro. Rien d'autre ici.
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"</code></pre>
+  <p>Autre règle propre à ce projet, pas à stb_truetype en général : <code>stb_truetype.h</code> ne doit <strong>jamais</strong> apparaître dans un en-tête ajouté au bridging header. <code>stbtt_fontinfo</code> est une struct C avec des champs internes que Swift n'a aucune raison de voir — le garder entièrement derrière un pimpl, comme la section suivante le montre, évite à Swift d'avoir à l'importer.</p>
+
+  <h2>PixelBuffer apprend à dessiner</h2>
+  <p>Jusqu'ici <code>PixelBuffer</code> n'exposait que de la lecture. Il gagne une écriture encapsulée plutôt qu'un pointeur mutable brut — le clipping et le mélange alpha restent à un seul endroit, jamais dupliqués ailleurs dans le moteur :</p>
+  <pre><code>// CORRECTION — Engine/PixelBuffer.hpp (ajouts)
+void fill(std::uint8_t r, std::uint8_t g, std::uint8_t b);
+void blendPixel(int x, int y,
+                 std::uint8_t r, std::uint8_t g, std::uint8_t b,
+                 std::uint8_t coverage);   // no-op si (x, y) est hors des bornes du buffer</code></pre>
+  <pre><code>// CORRECTION — Engine/PixelBuffer.cpp (ajouts)
+void PixelBuffer::fill(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+    for (int y = 0; y &lt; height_; ++y) {
+        for (int x = 0; x &lt; width_; ++x) {
+            const std::size_t i = (static_cast&lt;std::size_t&gt;(y) * width_ + x) * 4;
+            pixels_[i + 0] = r;
+            pixels_[i + 1] = g;
+            pixels_[i + 2] = b;
+            pixels_[i + 3] = 255;
+        }
+    }
+}
+
+void PixelBuffer::blendPixel(int x, int y, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t coverage) {
+    if (x &lt; 0 || y &lt; 0 || x &gt;= width_ || y &gt;= height_) {
+        return;
+    }
+    const std::size_t i = (static_cast&lt;std::size_t&gt;(y) * width_ + x) * 4;
+    const int inv = 255 - coverage;
+    pixels_[i + 0] = static_cast&lt;std::uint8_t&gt;((r * coverage + pixels_[i + 0] * inv + 127) / 255);
+    pixels_[i + 1] = static_cast&lt;std::uint8_t&gt;((g * coverage + pixels_[i + 1] * inv + 127) / 255);
+    pixels_[i + 2] = static_cast&lt;std::uint8_t&gt;((b * coverage + pixels_[i + 2] * inv + 127) / 255);
+    // alpha reste à 255 : le fond de ce buffer est toujours opaque
+}</code></pre>
+  <p><code>+ 127</code> avant la division par 255 arrondit au plus proche plutôt que de tronquer — sans lui, le texte "maigrit" visiblement sur les bords antialiasés, un défaut réel mais facile à ne jamais remarquer si on ne sait pas qu'il faut le chercher.</p>
+
+  <h2>Font : les octets et la police doivent vivre ensemble</h2>
+  <p>Point vérifié précisément dans le code source de stb_truetype, parce que c'est le piège central de cette leçon : <code>stbtt_InitFont</code> ne copie rien depuis le fichier <code>.ttf</code>, il pointe dedans.</p>
+  <blockquote>""Load" a font file from a memory buffer (you have to keep the buffer loaded)"</blockquote>
+  <p>Si le tableau d'octets du <code>.ttf</code> est détruit ou déplacé pendant que <code>stbtt_fontinfo</code> existe encore, chaque appel suivant lit de la mémoire invalide — silencieusement, jusqu'au crash aléatoire. La structure <code>Font</code> matérialise cette contrainte en gardant les octets et la <code>stbtt_fontinfo</code> dans le même objet, et en interdisant la copie :</p>
+  <pre><code>// NOUVEAU — Engine/Font.hpp — aucun #include de stb_truetype.h ici
+#pragma once
+#include &lt;cstdint&gt;
+#include &lt;memory&gt;
+#include &lt;vector&gt;
+
+namespace karamock {
+
+class Font {
+public:
+    Font();
+    ~Font();                          // définie dans le .cpp — obligatoire pour le pimpl
+    Font(Font&&) noexcept;
+    Font& operator=(Font&&) noexcept;
+    Font(const Font&) = delete;       // move-only : jamais deux Font pointant vers les mêmes octets
+    Font& operator=(const Font&) = delete;
+
+    bool loadFromMemory(std::vector&lt;std::uint8_t&gt; ttfBytes);   // prend possession des octets
+    bool loadFromMemory(const std::uint8_t* bytes, std::size_t count);   // copie count octets, délègue à la version au-dessus
+    bool isValid() const;
+
+    float scaleForPixelsHeight(float pixelHeight) const;
+    void verticalMetrics(int* ascent, int* descent, int* lineGap) const;
+
+private:
+    const void* nativeHandle() const; // réservé à TextRenderer — voir explication ci-dessous
+
+    struct Impl;                      // contient les octets ET stbtt_fontinfo, ensemble
+    std::unique_ptr&lt;Impl&gt; impl_;
+    friend class TextRenderer;
+};
+
+} // namespace karamock</code></pre>
+  <pre><code>// NOUVEAU — Engine/Font.cpp
+#include "Font.hpp"
+#include "stb_truetype.h"
+
+namespace karamock {
+
+struct Font::Impl {
+    std::vector&lt;std::uint8_t&gt; ttf;   // déclaré AVANT info : doit survivre à info
+    stbtt_fontinfo info{};
+    bool valid = false;
+};
+
+Font::Font() : impl_(std::make_unique&lt;Impl&gt;()) {}
+Font::~Font() = default;
+Font::Font(Font&&) noexcept = default;
+Font& Font::operator=(Font&&) noexcept = default;
+
+bool Font::loadFromMemory(std::vector&lt;std::uint8_t&gt; ttfBytes) {
+    impl_-&gt;ttf = std::move(ttfBytes);
+    const int offset = stbtt_GetFontOffsetForIndex(impl_-&gt;ttf.data(), 0);
+    impl_-&gt;valid = offset &gt;= 0 &amp;&amp; stbtt_InitFont(&amp;impl_-&gt;info, impl_-&gt;ttf.data(), offset) != 0;
+    return impl_-&gt;valid;
+}
+
+bool Font::loadFromMemory(const std::uint8_t* bytes, std::size_t count) {
+    if (!bytes || count == 0) {
+        impl_-&gt;valid = false;
+        return false;
+    }
+    std::vector&lt;std::uint8_t&gt; ttfBytes(bytes, bytes + count);   // une seule copie, ici
+    return loadFromMemory(std::move(ttfBytes));
+}
+
+bool Font::isValid() const { return impl_-&gt;valid; }
+
+float Font::scaleForPixelsHeight(float pixelHeight) const {
+    return stbtt_ScaleForPixelHeight(&amp;impl_-&gt;info, pixelHeight);
+}
+
+void Font::verticalMetrics(int* ascent, int* descent, int* lineGap) const {
+    stbtt_GetFontVMetrics(&amp;impl_-&gt;info, ascent, descent, lineGap);
+}
+
+const void* Font::nativeHandle() const {
+    return &amp;impl_-&gt;info;
+}
+
+} // namespace karamock</code></pre>
+  <p><strong>Pourquoi <code>nativeHandle()</code> est nécessaire, et pas seulement <code>friend class TextRenderer</code> seul :</strong> <code>Font.hpp</code> ne déclare <code>struct Impl;</code> qu'en <em>type incomplet</em> — sa définition complète (avec le champ <code>info</code>) n'existe que dans <code>Font.cpp</code>. La déclaration d'amitié donne à <code>TextRenderer</code> la <em>permission</em> d'accéder aux membres privés de <code>Font</code>, mais ne rend pas <code>Impl</code> complet pour autant : <code>TextRenderer.cpp</code>, qui ne voit jamais la définition de <code>Impl</code>, ne pourrait pas écrire <code>font.impl_-&gt;info</code> même en étant ami — le compilateur refuserait de déréférencer un type dont il ne connaît pas la taille ni les membres. <code>nativeHandle()</code> contourne ça proprement : elle retourne un <code>const void*</code> (un type toujours complet, quelle que soit son origine), calculé à l'intérieur de <code>Font.cpp</code> où <code>Impl</code> <em>est</em> complet, et <code>TextRenderer.cpp</code> n'a plus qu'à le re-caster vers <code>const stbtt_fontinfo*</code> — un type qu'il connaît déjà, puisqu'il inclut lui-même <code>stb_truetype.h</code>.</p>
+  <p>Cette même logique interdit toujours d'inclure <code>stb_truetype.h</code> dans <code>Font.hpp</code> — le type <code>stbtt_fontinfo</code> n'a besoin d'être connu que là où il est réellement manipulé (<code>Font.cpp</code> et <code>TextRenderer.cpp</code>), jamais dans un en-tête ajouté au bridging header.</p>
+  <p><code>Impl::ttf</code> déclaré avant <code>Impl::info</code> : les membres d'une struct C++ sont détruits dans l'ordre inverse de leur déclaration, donc <code>info</code> (qui pointe dans <code>ttf</code>) est détruit <em>avant</em> <code>ttf</code> — l'ordre inverse serait une destruction qui invaliderait un pointeur encore référencé l'instant d'avant. <code>~Font()</code> définie dans le <code>.cpp</code> plutôt que <code>= default</code> dans le header : nécessaire pour l'idiome pimpl, parce que <code>std::unique_ptr&lt;Impl&gt;</code> doit connaître la taille complète de <code>Impl</code> au moment où le destructeur est généré, ce qui n'est possible que là où <code>Impl</code> est entièrement défini.</p>
+
+  <h2>TextRenderer : la boucle glyphe par glyphe</h2>
+  <p>stb_truetype rasterise en <strong>niveaux de gris 8 bits</strong> — un octet de couverture par pixel (0 = transparent, 255 = plein), pas une couleur. Le fichier source le dit explicitement, et prévient d'un piège que la leçon doit respecter à la lettre :</p>
+  <blockquote>"note that this stomps the old data [...] if you want to render a sequence of characters, you really need to render each bitmap to a temp buffer, then 'alpha blend' that into the working buffer"</blockquote>
+  <p><code>stbtt_MakeCodepointBitmap</code> <strong>écrase</strong> ce qu'il y a dans le buffer qu'on lui passe, il ne mélange jamais. Rastériser directement dans <code>PixelBuffer</code> serait donc doublement faux : mauvais format (1 octet/pixel contre 4) et destruction du fond déjà dessiné. La bonne séquence : un petit buffer 8 bits temporaire par glyphe, puis <code>blendPixel</code> pixel par pixel dans le vrai buffer.</p>
+  <pre><code>// NOUVEAU — Engine/TextRenderer.hpp
+#pragma once
+#include &lt;cstdint&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+namespace karamock {
+
+class Font;
+class PixelBuffer;
+
+struct Color { std::uint8_t r, g, b; };
+
+class TextRenderer {
+public:
+    void drawText(PixelBuffer&amp; target, const Font&amp; font, const std::string&amp; text,
+                  int x, int baselineY, float pixelHeight, Color color);
+
+    int measureWidth(const Font&amp; font, const std::string&amp; text, float pixelHeight) const;
+
+private:
+    std::vector&lt;std::uint8_t&gt; glyphScratch_;   // buffer 8 bits réutilisé, remis à zéro à chaque glyphe
+};
+
+} // namespace karamock</code></pre>
+  <pre><code>// NOUVEAU — Engine/TextRenderer.cpp (fichier complet)
+#include "TextRenderer.hpp"
+#include "Font.hpp"
+#include "PixelBuffer.hpp"
+#include "stb_truetype.h"
+
+namespace karamock {
+
+void TextRenderer::drawText(PixelBuffer&amp; target, const Font&amp; font, const std::string&amp; text,
+                             int x, int baselineY, float pixelHeight, Color color) {
+    if (!font.isValid()) {
+        return;
+    }
+    const stbtt_fontinfo* fontInfo = static_cast&lt;const stbtt_fontinfo*&gt;(font.nativeHandle());
+    const float scale = font.scaleForPixelsHeight(pixelHeight);
+    float xpos = static_cast&lt;float&gt;(x);
+
+    for (std::size_t k = 0; k &lt; text.size(); ++k) {
+        const int c = static_cast&lt;unsigned char&gt;(text[k]);
+
+        int advance = 0, leftBearing = 0;
+        stbtt_GetCodepointHMetrics(fontInfo, c, &amp;advance, &amp;leftBearing);
+
+        int ix0, iy0, ix1, iy1;
+        stbtt_GetCodepointBitmapBox(fontInfo, c, scale, scale, &amp;ix0, &amp;iy0, &amp;ix1, &amp;iy1);
+        const int w = ix1 - ix0;
+        const int h = iy1 - iy0;
+
+        if (w &gt; 0 &amp;&amp; h &gt; 0) {                                        // ' ' donne w == 0 : rien à dessiner
+            glyphScratch_.assign(static_cast&lt;std::size_t&gt;(w) * h, 0);   // reset — sinon glyphe "fantôme"
+            stbtt_MakeCodepointBitmap(fontInfo, glyphScratch_.data(), w, h, /*stride*/ w, scale, scale, c);
+
+            for (int gy = 0; gy &lt; h; ++gy) {
+                for (int gx = 0; gx &lt; w; ++gx) {
+                    const std::uint8_t coverage = glyphScratch_[static_cast&lt;std::size_t&gt;(gy) * w + gx];
+                    if (coverage != 0) {
+                        target.blendPixel(static_cast&lt;int&gt;(xpos) + ix0 + gx, baselineY + iy0 + gy,
+                                           color.r, color.g, color.b, coverage);
+                    }
+                }
+            }
+        }
+
+        xpos += advance * scale;
+        if (k + 1 &lt; text.size()) {
+            xpos += scale * stbtt_GetCodepointKernAdvance(fontInfo, c, static_cast&lt;unsigned char&gt;(text[k + 1]));
+        }
+    }
+}
+
+int TextRenderer::measureWidth(const Font&amp; font, const std::string&amp; text, float pixelHeight) const {
+    if (!font.isValid()) {
+        return 0;
+    }
+    const stbtt_fontinfo* fontInfo = static_cast&lt;const stbtt_fontinfo*&gt;(font.nativeHandle());
+    const float scale = font.scaleForPixelsHeight(pixelHeight);
+    float width = 0.0f;
+
+    for (std::size_t k = 0; k &lt; text.size(); ++k) {
+        const int c = static_cast&lt;unsigned char&gt;(text[k]);
+        int advance = 0, leftBearing = 0;
+        stbtt_GetCodepointHMetrics(fontInfo, c, &amp;advance, &amp;leftBearing);
+        width += advance * scale;
+        if (k + 1 &lt; text.size()) {
+            width += scale * stbtt_GetCodepointKernAdvance(fontInfo, c, static_cast&lt;unsigned char&gt;(text[k + 1]));
+        }
+    }
+    return static_cast&lt;int&gt;(width);
+}
+
+} // namespace karamock</code></pre>
+  <p><code>measureWidth</code> reprend exactement le calcul d'avancement de <code>drawText</code>, sans jamais rastériser — c'est ce qui permet de centrer "Karamock" dans le cadre de preuve sans dessiner deux fois. <code>font.isValid()</code> vérifié en tête des deux fonctions : si <code>loadFromMemory</code> a échoué (fichier introuvable dans le bundle, <code>.ttf</code> corrompu), <code>drawText</code> ne fait rien plutôt que de déréférencer un <code>stbtt_fontinfo</code> jamais initialisé.</p>
+  <p>Deux détails qui, oubliés, produisent un rendu silencieusement faux plutôt qu'un crash : <code>iy0</code> est négatif pour la plupart des lettres (au-dessus de la ligne de base — le bitmap est rangé en y-descendant, l'inverse du sens des contours), donc <code>baselineY + iy0</code> place bien le haut du glyphe, pas son bas. Et <code>glyphScratch_.assign(...)</code> doit être appelé à <strong>chaque</strong> glyphe — sans ce reset, les pixels non couverts du glyphe précédent (plus large) restent dans le buffer et se mélangent au suivant.</p>
+
+  <h2>Une police que le projet a le droit d'embarquer</h2>
+  <p>stb_truetype ne lit que des polices statiques (une graisse = un fichier <code>.ttf</code>) — vérifié dans le code source, aucune table <code>fvar</code>/<code>gvar</code> n'y est gérée, donc une police variable moderne ne fonctionnerait qu'en instance par défaut, sans contrôle. C'est un piège concret à éviter dès le téléchargement : le bouton "Download family" classique de Google Fonts distribue souvent une police <strong>variable</strong> (un seul fichier pour tous les poids) — stb_truetype ne saurait pas y choisir Regular ou Bold. Police retenue : <strong>Noto Sans</strong>, en allant chercher directement ses fichiers TTF statiques plutôt que par le téléchargement grand public :</p>
+  <ul>
+    <li>Regular : <code>https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf</code></li>
+    <li>Bold (facultatif pour cette leçon, utile plus tard pour une ligne active en gras) : <code>https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/NotoSans/hinted/ttf/NotoSans-Bold.ttf</code></li>
+  </ul>
+  <p>Même geste que pour <code>stb_truetype.h</code> : ouvrir l'URL, Cmd+S pour enregistrer. Sous licence SIL Open Font License 1.1 — le texte exact se trouve à <code>https://raw.githubusercontent.com/notofonts/latin-greek-cyrillic/main/OFL.txt</code>, à télécharger et embarquer lui aussi (voir plus bas pourquoi). La clause d'autorisation couvre explicitement ce cas d'usage :</p>
+  <blockquote>"Original or Modified Versions of the Font Software may be bundled, redistributed and/or sold with any software, provided that each copy contains the above copyright notice and this license."</blockquote>
+  <p>Embarquer <code>NotoSans-Regular.ttf</code> dans l'app, App Store compris, est explicitement autorisé — à une obligation concrète près : livrer une copie de la notice de copyright et du texte de licence avec l'app, exactement le fichier <code>OFL.txt</code> téléchargé ci-dessus (dans le bundle, ou listé sur un écran "Licences" — les licences de logiciels tiers, ça se code aussi, pas juste une formalité à reporter).</p>
+  <p>Différence importante avec les fichiers <code>.hpp</code>/<code>.cpp</code> vus plus haut : un <code>.ttf</code> n'est pas du code, c'est une <strong>ressource</strong>. Glisse <code>NotoSans-Regular.ttf</code> et <code>OFL.txt</code> dans le projet (cible <code>Karamock</code> cochée, "Copy items if needed" coché), puis vérifie dans <em>Build Phases</em> → <strong>Copy Bundle Resources</strong> que les deux y apparaissent — c'est ce qui les rend accessibles au runtime via <code>Bundle.main.url(forResource:withExtension:)</code>, pas les <em>Compile Sources</em> utilisées pour le code C++/Swift.</p>
+  <p>Une confusion possible si tu as déjà embarqué des polices iOS ailleurs : <strong>pas besoin</strong> de déclarer la police dans <code>Info.plist</code> sous "Fonts provided by application" (<code>UIAppFonts</code>) — cette déclaration sert à enregistrer une police auprès d'UIKit/CoreText pour l'utiliser via <code>UIFont(name:)</code>. Ici, rien n'est demandé à UIKit : Swift lit les octets bruts du fichier et les passe directement à <code>Font::loadFromMemory</code>, qui les interprète lui-même via stb_truetype.</p>
+
+  <h2>Côté Swift : charger la police depuis le bundle, dessiner "Karamock"</h2>
+  <pre><code>// CORRECTION — Views/Discovery/EngineProofView.swift
+private static func render(pointSize: CGSize, scale: CGFloat) -> CGImage? {
+    let pixelWidth  = Int((pointSize.width  * scale).rounded())
+    let pixelHeight = Int((pointSize.height * scale).rounded())
+
+    guard let fontURL = Bundle.main.url(forResource: "NotoSans-Regular", withExtension: "ttf"),
+          let fontData = try? Data(contentsOf: fontURL)
+    else { return nil }
+
+    var font = karamock.Font()
+    let loaded = fontData.withUnsafeBytes { rawBuffer -> Bool in
+        guard let base = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return false }
+        return font.loadFromMemory(base, rawBuffer.count)
+    }
+    guard loaded else { return nil }
+
+    var buffer = karamock.PixelBuffer()
+    buffer.resize(Int32(pixelWidth), Int32(pixelHeight))
+    buffer.fill(20, 20, 30)   // fond sombre, pour que le texte clair ressorte
+
+    var renderer = karamock.TextRenderer()
+    let color = karamock.Color(r: 240, g: 240, b: 245)
+    renderer.drawText(&buffer, font, std.string("Karamock"), 20, Int32(pixelHeight / 2), 48, color)
+
+    guard let base = buffer.__dataUnsafe() else { return nil }
+    let pixels = Data(bytes: base, count: buffer.sizeInBytes())
+
+    guard let provider = CGDataProvider(data: pixels as CFData),
+          let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+    else { return nil }
+
+    let bitmapInfo = CGBitmapInfo(
+        rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                | CGImageByteOrderInfo.order32Big.rawValue
+    )
+
+    return CGImage(
+        width: Int(buffer.width()), height: Int(buffer.height()),
+        bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: Int(buffer.bytesPerRow()),
+        space: colorSpace, bitmapInfo: bitmapInfo, provider: provider,
+        decode: nil, shouldInterpolate: false, intent: .defaultIntent
+    )
+}</code></pre>
+  <p><code>fontData.withUnsafeBytes { ... }</code> plutôt que <code>Array(fontData)</code> : ce dernier aurait fonctionné, mais en copiant deux fois (une fois de <code>Data</code> vers <code>[UInt8]</code>, une seconde fois de <code>[UInt8]</code> vers le <code>std::vector&lt;uint8_t&gt;</code> C++ à la frontière — dont la Leçon 37 a déjà signalé que l'interop ne garantit aucune performance particulière pour ce genre de conversion). <code>withUnsafeBytes</code> donne directement un pointeur dans le buffer déjà détenu par <code>Data</code>, passé tel quel à la seconde surcharge de <code>loadFromMemory</code> — une seule copie au total, celle que <code>Font</code> doit de toute façon faire pour posséder ses propres octets. Sans rapport avec le sujet de performance à chaque frame déjà signalé en Leçon 37 pour la lecture <em>depuis</em> Swift : ici c'est l'inverse, un envoi ponctuel vers le C++, une fois au lancement.</p>
+  <p>Autre correction à ne pas manquer : <code>baselineY</code> est un <code>int</code> côté C++, donc un <code>Int32</code> côté Swift — un littéral comme <code>20</code> passe directement, mais <code>pixelHeight / 2</code> (un <code>Int</code> Swift, pas un littéral) a besoin du cast explicite <code>Int32(...)</code>, sans quoi le projet ne compile pas. <code>std.string("Karamock")</code> : même cast obligatoire qu'en Leçon 37, une chaîne littérale ne suffit pas à passer un <code>std::string</code> en argument.</p>
+  <pre><code>// Bridging header
+#include "Engine/LyricsStore.hpp"
+#include "Engine/PixelBuffer.hpp"
+#include "Engine/Font.hpp"
+#include "Engine/TextRenderer.hpp"</code></pre>
+  <p>Dans Xcode : ajoute <code>NotoSans-Regular.ttf</code> et <code>OFL.txt</code> au bundle de ressources de la target (glisser dans le projet, cocher "Copy items if needed" et la target <code>Karamock</code>). Le dossier <code>Engine/ThirdParty/</code> reçoit <code>stb_truetype.h</code> (fichier vendu tel quel, licence comprise) et <code>stb_truetype_impl.cpp</code>.</p>
+
+  <div class="mission-tie">
+    <strong>État réel de l'implémentation (comparé le 8 août 2026) :</strong> conforme dans l'ensemble, avec deux écarts corrigés ci-dessus dans la leçon — <code>scaleForPixelHeight</code> renommée <code>scaleForPixelsHeight</code>, et surtout un <code>Int32(pixelHeight / 2)</code> nécessaire pour <code>baselineY</code> que la leçon ne montrait pas (le code ne compilait pas sans ce cast). Une amélioration a aussi été adoptée depuis l'implémentation réelle : le chargement de la police passe par <code>withUnsafeBytes</code> et une surcharge <code>loadFromMemory(const uint8_t*, size_t)</code>, plutôt que par <code>Array(fontData)</code> — une copie de moins.
+  </div>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Vérifie que <code>NotoSans-Regular.ttf</code> et <code>OFL.txt</code> sont bien copiés dans le bundle de l'app (Build Phases → Copy Bundle Resources).</li>
+      <li>Build (⌘B) sur un simulateur iPhone <strong>et</strong> un simulateur Apple TV : les deux doivent réussir.</li>
+      <li>Ouvre l'écran Découvrir : le mot "Karamock" doit apparaître lisible, en clair sur fond sombre, à la place du dégradé/damier de la Leçon 37.</li>
+      <li>Vérifie que les lettres rondes ("a", "o") ne laissent voir aucun résidu du glyphe précédent superposé (le bug du <code>glyphScratch_</code> non réinitialisé, si présent, produit des taches visibles entre les lettres).</li>
+      <li>Compare la netteté du texte entre un simulateur @2x et @3x : doit rester net dans les deux cas, <code>displayScale</code> continue de s'appliquer comme en Leçon 37.</li>
+      <li>Retire temporairement <code>+ 127</code> de <code>blendPixel</code> pour comparer visuellement l'arrondi vs la troncature sur les bords des lettres, puis remets-le.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>PixelBuffer : lecture seule, motif de test uniquement</td><td><code>fill()</code> et <code>blendPixel()</code> — écriture encapsulée, clipping inclus</td></tr>
+    <tr><td>Aucune police dans le projet</td><td><code>NotoSans-Regular.ttf</code> (SIL OFL 1.1) + <code>OFL.txt</code> dans le bundle</td></tr>
+    <tr><td>Aucun rendu de texte</td><td><code>Font</code> + <code>TextRenderer</code>, glyphe par glyphe, via stb_truetype</td></tr>
+    <tr><td>Le buffer affiche un dégradé et un damier</td><td>Le buffer affiche "Karamock", en vrai texte lisible</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h">nothings/stb — stb_truetype.h</a> — licence, avertissement de sécurité, API complète, exemple de référence.<br>
+    <a href="https://raw.githubusercontent.com/notofonts/latin-greek-cyrillic/main/OFL.txt">notofonts/latin-greek-cyrillic — OFL.txt</a> — texte de licence de Noto Sans.<br>
+    <a href="https://fonts.google.com/noto/specimen/Noto+Sans">Google Fonts — Noto Sans</a> — téléchargement.<br>
+    <a href="https://github.com/tsoding/wasm-stb-truetype">tsoding/wasm-stb-truetype</a> — preuve de compilation de stb_truetype en WebAssembly freestanding, sans Emscripten.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi #define STB_TRUETYPE_IMPLEMENTATION doit-il apparaître dans exactement un seul fichier .cpp du projet ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce que le garde d'inclusion (#ifndef __STB_INCLUDE_STB_TRUETYPE_H__) empêche déjà toute inclusion multiple, donc un seul fichier peut de toute façon voir la macro activée</label>
+    <label><input type="radio" name="q1" value="b"> Parce que stb_truetype limite volontairement le nombre de polices chargées simultanément à une par unité de compilation où la macro est définie</label>
+    <label><input type="radio" name="q1" value="c"> La macro fait basculer le header de simples prototypes extern à l'implémentation réelle des fonctions — l'omettre partout laisse des symboles non définis au lien, la définir deux fois duplique ces mêmes symboles</label>
+    <label><input type="radio" name="q1" value="d"> Parce que STBTT_STATIC doit obligatoirement accompagner STB_TRUETYPE_IMPLEMENTATION pour que le compilateur accepte plusieurs définitions</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Pourquoi stbtt_MakeCodepointBitmap ne peut-il pas écrire directement dans PixelBuffer ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce que PixelBuffer est en lecture seule tant que blendPixel n'est pas appelé explicitement en premier</label>
+    <label><input type="radio" name="q2" value="b"> Parce qu'il produit un masque de couverture 8 bits en niveaux de gris qui écrase (ne mélange pas) tout ce qu'on lui passe, alors que PixelBuffer stocke du RGBA 32 bits avec un fond déjà dessiné à préserver</label>
+    <label><input type="radio" name="q2" value="c"> Parce que stbtt_MakeCodepointBitmap exige un buffer aligné sur 16 octets, ce que PixelBuffer ne garantit pas</label>
+    <label><input type="radio" name="q2" value="d"> Parce que le namespace karamock entre en conflit avec les symboles internes de stb_truetype si on partage le même buffer</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi Font::Impl déclare-t-il ttf avant info, dans cet ordre précis ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que stbtt_InitFont exige que le champ contenant les octets soit physiquement placé avant la struct qu'il initialise en mémoire</label>
+    <label><input type="radio" name="q3" value="b"> Parce que le compilateur optimise mieux l'accès si les gros membres (le vector) précèdent les petits (la struct stbtt_fontinfo)</label>
+    <label><input type="radio" name="q3" value="c"> Parce que std::unique_ptr exige que ses membres soient déclarés par ordre de taille croissante</label>
+    <label><input type="radio" name="q3" value="d"> Les membres sont détruits dans l'ordre inverse de leur déclaration — info doit être détruit avant ttf, puisque info pointe dans ttf et ne doit jamais survivre à sa destruction</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. Pourquoi Font interdit-il explicitement la copie (Font(const Font&) = delete) ?</p>
+    <label><input type="radio" name="q4" value="a"> Une copie superficielle dupliquerait le pointeur interne de stbtt_fontinfo vers les octets originaux sans dupliquer ces octets — deux Font pointeraient vers le même buffer, et la destruction de l'un invaliderait l'autre</label>
+    <label><input type="radio" name="q4" value="b"> Parce que stbtt_fontinfo n'est techniquement pas copiable par le compilateur C++ lui-même</label>
+    <label><input type="radio" name="q4" value="c"> Parce que l'interop Swift/C++ refuse d'importer tout type C++ copiable contenant un std::vector</label>
+    <label><input type="radio" name="q4" value="d"> Pour forcer l'utilisation exclusive de std::shared_ptr côté appelant</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">5. Pourquoi glyphScratch_.assign(w * h, 0) doit-il être appelé avant chaque glyphe, et pas une seule fois avant la boucle ?</p>
+    <label><input type="radio" name="q5" value="a"> Parce que stbtt_MakeCodepointBitmap exige un buffer alloué à neuf, jamais réutilisé d'un appel à l'autre</label>
+    <label><input type="radio" name="q5" value="b"> Parce que assign() est le seul moyen de redimensionner un std::vector en C++17</label>
+    <label><input type="radio" name="q5" value="c"> Chaque glyphe a une taille w×h différente, et MakeCodepointBitmap n'écrit que les pixels réellement couverts par la lettre — sans ce reset, les octets résiduels du glyphe précédent (souvent plus grand) restent visibles autour du suivant</label>
+    <label><input type="radio" name="q5" value="d"> Parce que le compilateur optimise glyphScratch_ hors de la boucle si l'assign n'est pas répété à chaque itération</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">6. D'après la licence SIL Open Font License de Noto Sans, qu'est-ce qui est explicitement interdit ?</p>
+    <label><input type="radio" name="q6" value="a"> Modifier le fichier .ttf de quelque façon que ce soit avant de l'embarquer dans une app</label>
+    <label><input type="radio" name="q6" value="b"> Vendre la police seule, indépendamment de tout logiciel — mais l'embarquer et la redistribuer avec une app, y compris payante, est explicitement autorisé</label>
+    <label><input type="radio" name="q6" value="c"> Toute utilisation commerciale de la police, y compris dans une app vendue sur l'App Store</label>
+    <label><input type="radio" name="q6" value="d"> Utiliser la police sur une plateforme autre que celle pour laquelle elle a été téléchargée</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">7. Pourquoi baselineY + iy0 place-t-il correctement le haut du glyphe, alors qu'iy0 est négatif pour la plupart des lettres ?</p>
+    <label><input type="radio" name="q7" value="a"> iy0 mesure la distance entre la ligne de base et le haut du glyphe dans un repère où le bitmap est rangé en y-descendant — un iy0 négatif signifie "au-dessus de la ligne de base", donc l'additionner remonte bien le point de départ</label>
+    <label><input type="radio" name="q7" value="b"> Parce qu'iy0 est en réalité toujours positif après un cast implicite dans stbtt_GetCodepointBitmapBox</label>
+    <label><input type="radio" name="q7" value="c"> Parce que baselineY est lui-même négatif par convention dans stb_truetype</label>
+    <label><input type="radio" name="q7" value="d"> Parce que blendPixel inverse automatiquement le signe de la coordonnée y avant d'écrire dans le buffer</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le texte s'affiche mais certaines lettres sont visiblement tronquées sur les bords du rectangle de preuve ? Vérifie d'abord la largeur totale attendue avec measureWidth(font:text:pixelHeight:) comparée à pointSize.width — "Karamock" à 48px de hauteur peut dépasser un cadre de test pensé pour le motif de la Leçon 37, plus étroit que nécessaire. Pose la question avec la largeur mesurée si le dépassement persiste après ajustement du cadre.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0037-canvas-logiciel-buffer-pixels.html">← Leçon 37 : le canvas logiciel, du buffer C++ à l'écran</a></span>
+    <span>Leçon suivante : à venir (les vraies paroles, plusieurs lignes, mise en page)</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

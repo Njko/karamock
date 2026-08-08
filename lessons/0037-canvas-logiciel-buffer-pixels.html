@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 37 — Le canvas logiciel : du buffer C++ à l'écran</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 37 · Moteur de paroles en C++ (1/N)</p>
+  <h1>Le canvas logiciel : du buffer C++ à l'écran</h1>
+  <p class="subtitle">Une première version de cette leçon explorait Metal via metal-cpp. Elle est remplacée par celle-ci : l'objectif du moteur n'est pas seulement de tourner sur iOS/tvOS, mais d'imiter une vraie bibliothèque C++ portée sur desktop et Web — et Metal, comme toute API graphique Apple, casserait cet objectif dès la première ligne. La solution retenue est celle qu'utilisent les moteurs 2D réellement portés partout (Skia en est l'exemple le plus connu) : un cœur 100% C++ standard qui dessine dans un buffer de pixels en mémoire, sans dépendance de plateforme, et une coquille de présentation différente par plateforme. Cette leçon prouve le mécanisme de bout en bout — un motif de test, pas encore de vrai texte, pas encore de boucle d'animation.</p>
+
+  <h2>Le buffer, côté C++ : rien d'Apple à l'intérieur</h2>
+  <p><code>PixelBuffer</code> ne connaît ni Metal, ni Objective-C, ni même Xcode — c'est la condition pour qu'il compile un jour ailleurs que sur Apple :</p>
+  <pre><code>// NOUVEAU — Engine/PixelBuffer.hpp
+#pragma once
+#include &lt;cstddef&gt;
+#include &lt;cstdint&gt;
+#include &lt;vector&gt;
+
+namespace karamock {
+
+class PixelBuffer {
+public:
+    PixelBuffer() = default;
+
+    void resize(int width, int height);
+    void fillTestPattern();
+
+    int width() const;
+    int height() const;
+    int bytesPerRow() const;               // largeur × 4 — calculé côté C++, jamais recalculé côté Swift
+    std::size_t sizeInBytes() const;
+    const std::uint8_t* data() const;
+
+private:
+    int width_ = 0;
+    int height_ = 0;
+    std::vector&lt;std::uint8_t&gt; pixels_;   // RGBA8, zéro dépendance Apple
+};
+
+} // namespace karamock</code></pre>
+  <pre><code>// NOUVEAU — Engine/PixelBuffer.cpp
+#include "PixelBuffer.hpp"
+
+namespace karamock {
+
+void PixelBuffer::resize(int width, int height) {
+    width_  = width  > 0 ? width  : 0;
+    height_ = height > 0 ? height : 0;
+    pixels_.assign(static_cast&lt;std::size_t&gt;(width_) * height_ * 4, 0);
+}
+
+void PixelBuffer::fillTestPattern() {
+    const int lastX = width_  &gt; 1 ? width_  - 1 : 1;
+    const int lastY = height_ &gt; 1 ? height_ - 1 : 1;
+
+    for (int y = 0; y &lt; height_; ++y) {
+        for (int x = 0; x &lt; width_; ++x) {
+            const std::size_t i = (static_cast&lt;std::size_t&gt;(y) * width_ + x) * 4;
+            const bool light = (((x / 32) + (y / 32)) % 2) == 0;
+
+            pixels_[i + 0] = static_cast&lt;std::uint8_t&gt;(x * 255 / lastX);  // R : dégradé horizontal
+            pixels_[i + 1] = static_cast&lt;std::uint8_t&gt;(y * 255 / lastY);  // G : dégradé vertical
+            pixels_[i + 2] = light ? 200 : 40;                             // B : damier 32 px
+            pixels_[i + 3] = 255;                                          // A : opaque
+        }
+    }
+}
+
+int         PixelBuffer::width()       const { return width_; }
+int         PixelBuffer::height()      const { return height_; }
+int         PixelBuffer::bytesPerRow() const { return width_ * 4; }
+std::size_t PixelBuffer::sizeInBytes() const { return pixels_.size(); }
+const std::uint8_t* PixelBuffer::data() const { return pixels_.data(); }
+
+} // namespace karamock</code></pre>
+  <p>Le motif n'est pas décoratif, il est diagnostique : le dégradé rouge/vert révèle immédiatement une inversion largeur/hauteur, le damier révèle un mauvais <code>bytesPerRow</code> (l'image partirait en diagonale), et le fait que le damier soit porté par le canal bleu seul révèle une inversion de l'ordre des canaux (il apparaîtrait rouge au lieu de bleu). Un simple aplat de couleur ne prouverait aucun de ces trois points.</p>
+  <pre><code>// Karamock-Bridging-Header.h
+#include "Engine/LyricsStore.hpp"
+#include "Engine/PixelBuffer.hpp"</code></pre>
+
+  <h2>Le piège du jour : Swift renomme les pointeurs qu'il juge dangereux</h2>
+  <p>Point vérifié précisément avant d'écrire quoi que ce soit, parce que le symptôme est déroutant si on ne sait pas à quoi s'attendre : <code>buffer.data()</code>, tel quel, ne compile pas côté Swift — l'auto-complétion ne propose même pas ce nom. La documentation officielle explique pourquoi :</p>
+  <blockquote>"Member functions that return references, pointers, or certain structures/classes that contain references or pointers often return a reference that points inside of <em>this</em>, the object used to call the function. Such member functions are considered to be unsafe in Swift […] Swift automatically renames such member functions in order to emphasize their unsafety. Their Swift name is prefixed with two underscores and suffixed with <em>Unsafe</em>."</blockquote>
+  <p><code>const std::uint8_t* data() const</code> pointe à l'intérieur du <code>std::vector</code> que possède l'objet <code>PixelBuffer</code> — si ce dernier est détruit ou redimensionné pendant que Swift tient encore ce pointeur, c'est un accès mémoire invalide. Swift ne peut pas le vérifier statiquement, donc il rend le danger visible dans le nom lui-même : côté Swift, la méthode s'appelle <code>__dataUnsafe()</code>, et retourne un <code>UnsafePointer&lt;UInt8&gt;!</code>.</p>
+  <p>La documentation swift.org donne directement la parade recommandée :</p>
+  <blockquote>"The recommended approach to calling member functions that return a reference or a view type with a dependent lifetime is to wrap them in a Swift API that returns a copy of the referenced object."</blockquote>
+  <p>Concrètement : appeler <code>__dataUnsafe()</code> et copier immédiatement son contenu dans un <code>Data</code> Swift, en une seule opération — après cette ligne, plus aucune dépendance au buffer C++ :</p>
+  <pre><code>guard let base = buffer.__dataUnsafe() else { return nil }
+let pixels = Data(bytes: base, count: buffer.sizeInBytes())
+// à partir d'ici : `pixels` est autonome, `buffer` peut être redimensionné ou détruit sans risque</code></pre>
+
+  <h2>Construire le CGImage : chaque paramètre compte</h2>
+  <pre><code>guard let provider = CGDataProvider(data: pixels as CFData),
+      let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+else { return nil }
+
+let bitmapInfo = CGBitmapInfo(
+    rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+            | CGImageByteOrderInfo.order32Big.rawValue
+)
+
+let image = CGImage(
+    width: Int(buffer.width()),
+    height: Int(buffer.height()),
+    bitsPerComponent: 8,
+    bitsPerPixel: 32,
+    bytesPerRow: Int(buffer.bytesPerRow()),
+    space: colorSpace,
+    bitmapInfo: bitmapInfo,
+    provider: provider,
+    decode: nil,
+    shouldInterpolate: false,
+    intent: .defaultIntent
+)</code></pre>
+  <p>Trois choix qui, mal faits, produisent silencieusement une image déformée ou aux couleurs fausses plutôt qu'un crash — donc invisibles sans savoir précisément quoi vérifier :</p>
+  <ul>
+    <li><strong><code>CGColorSpace.sRGB</code>, pas <code>CGColorSpaceCreateDeviceRGB()</code></strong> : Apple déconseille explicitement l'espace dépendant du périphérique — les couleurs y varient d'un écran à l'autre. <code>sRGB</code> est l'espace standard, stable.</li>
+    <li><strong><code>bytesPerRow</code> vient de <code>buffer.bytesPerRow()</code>, jamais recalculé côté Swift</strong> : c'est le C++ qui sait comment ses lignes sont organisées en mémoire. Le jour où le moteur ajoutera un alignement de ligne (fréquent pour de vraies bibliothèques graphiques), Swift n'aura rien à changer.</li>
+    <li><strong><code>CGImageByteOrderInfo.order32Big</code>, pas <code>CGBitmapInfo.byteOrder32Big</code></strong> : les deux valent la même chose aujourd'hui, mais <code>CGBitmapInfo.byteOrder32Big</code> est déprécié depuis la version 27.0 de la documentation Apple (aucun avertissement à la compilation avec le SDK actuel du projet, mais autant utiliser directement la forme pérenne). Sans cet indicateur d'ordre d'octets du tout, on obtient le bug classique "rouge et bleu inversés" — ici, le damier apparaîtrait rouge au lieu de bleu, exactement le genre d'erreur que le motif de test est censé révéler.</li>
+  </ul>
+
+  <h2>L'échelle d'affichage : pixels, pas points</h2>
+  <p>Le moteur doit recevoir une taille en <strong>pixels physiques</strong>, pas en points SwiftUI — sinon l'image est rendue à une résolution plus basse que l'écran et paraît floue une fois étirée. <code>@Environment(\.displayScale)</code> donne ce facteur, disponible en SwiftUI depuis toujours (iOS/tvOS 13.0+) :</p>
+  <pre><code>@Environment(\.displayScale) private var displayScale</code></pre>
+  <details class="aside">
+    <summary>UIScreen.main.scale existe encore, mais vient d'être marqué obsolète</summary>
+    <p>Vérifié dans la documentation Apple actuelle : <code>UIScreen.main</code> est déprécié depuis iOS 26.0/tvOS 26.0 — exactement la cible de ce projet, ce n'est donc pas une mise en garde théorique. Citation : <em>"Apple discourages the use of this symbol. Use a UIScreen instance found through context instead."</em> Pour un facteur d'échelle spécifiquement, la documentation redirige vers <code>traitCollection.displayScale</code> de la vue concernée — mais en SwiftUI pur, sans <code>UIViewRepresentable</code>, <code>@Environment(\.displayScale)</code> couvre déjà ce besoin sans avoir à passer par UIKit.</p>
+  </details>
+
+  <h2>Afficher l'image, et la preuve temporaire</h2>
+  <pre><code>// NOUVEAU — Views/Discovery/EngineProofView.swift
+import CoreGraphics
+import Foundation
+import SwiftUI
+
+struct EngineProofView: View {
+    @Environment(\.displayScale) private var displayScale
+    @State private var image: CGImage?
+
+    private let pointSize = CGSize(width: 240, height: 135)
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(decorative: image, scale: displayScale)
+                    .interpolation(.none)
+            } else {
+                ProgressView()
+            }
+        }
+        .frame(width: pointSize.width, height: pointSize.height)
+        .task(id: displayScale) {
+            image = Self.render(pointSize: pointSize, scale: displayScale)
+        }
+    }
+
+    private static func render(pointSize: CGSize, scale: CGFloat) -> CGImage? {
+        let pixelWidth  = Int((pointSize.width  * scale).rounded())
+        let pixelHeight = Int((pointSize.height * scale).rounded())
+
+        var buffer = karamock.PixelBuffer()
+        buffer.resize(Int32(pixelWidth), Int32(pixelHeight))
+        buffer.fillTestPattern()
+
+        guard let base = buffer.__dataUnsafe() else { return nil }
+        let pixels = Data(bytes: base, count: buffer.sizeInBytes())
+
+        guard let provider = CGDataProvider(data: pixels as CFData),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+        else { return nil }
+
+        let bitmapInfo = CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                    | CGImageByteOrderInfo.order32Big.rawValue
+        )
+
+        return CGImage(
+            width: Int(buffer.width()),
+            height: Int(buffer.height()),
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: Int(buffer.bytesPerRow()),
+            space: colorSpace,
+            bitmapInfo: bitmapInfo,
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )
+    }
+}</code></pre>
+  <p><code>.interpolation(.none)</code> garde le damier net — sans lui, SwiftUI lisse l'image à l'affichage et les bords du damier deviennent flous, masquant justement ce que le motif est censé révéler. <code>.task(id: displayScale)</code> plutôt que <code>.task</code> seul : si l'échelle change (l'app passe d'un écran à un autre, rare mais possible), l'image se régénère à la bonne résolution.</p>
+  <p>Comme les preuves des Leçons 35 et 37 (l'ancienne version), celle-ci est temporaire — ajoutée pour vérifier le mécanisme, retirée dès qu'un vrai rendu de texte existera :</p>
+  <pre><code>// CORRECTION — Views/Discovery/DiscoveryView.swift
+VStack(alignment: .leading, spacing: 24) {
+    EngineProofView()
+    PlaylistSection(playlists: mockPlaylist)
+}</code></pre>
+
+  <div class="mission-tie">
+    <strong>État réel de l'implémentation (comparé le 8 août 2026) :</strong> le code correspond exactement à ce qu'enseigne cette leçon — <code>PixelBuffer</code>, <code>EngineProofView</code> et le bridging header sont conformes point par point, y compris le passage par <code>__dataUnsafe()</code> et la chaîne <code>CGImage</code> complète (espace colorimétrique, ordre des octets, <code>bytesPerRow</code> lu depuis le C++). Aucune correction nécessaire.
+  </div>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build (⌘B) sur un simulateur iPhone <strong>et</strong> un simulateur Apple TV : les deux doivent réussir — <code>PixelBuffer</code> ne dépend d'aucune plateforme.</li>
+      <li>Ouvre l'écran Découvrir : un rectangle 240×135 apparaît, dégradé rouge (horizontal) vers vert (vertical), avec un damier bleu/gris visible en surimpression.</li>
+      <li>Vérifie que le damier est net, pas flou (<code>.interpolation(.none)</code> a un effet visible si on le retire temporairement pour comparer).</li>
+      <li>Vérifie que le damier n'apparaît <strong>pas</strong> en rouge ou en violet — un damier rouge indiquerait un ordre de canaux inversé (BGRA au lieu de RGBA), à corriger dans <code>bitmapInfo</code> avant de continuer.</li>
+      <li>Vérifie qu'aucune ligne du rectangle ne part en diagonale — un décalage progressif indiquerait un <code>bytesPerRow</code> incorrect.</li>
+      <li>Sur simulateur @2x et @3x (change de modèle d'iPhone simulé) : vérifie que le motif reste net dans les deux cas — preuve que <code>displayScale</code> est bien pris en compte.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>Piste explorée : Metal via metal-cpp, deux frontières C++ (directe + Objective-C++)</td><td>Piste retenue : un seul chemin, <code>PixelBuffer</code> 100% C++ standard, réutilise l'interop direct de LyricsStore</td></tr>
+    <tr><td>Aucune preuve que du C++ peut produire une image affichable</td><td><code>PixelBuffer</code> remplit un motif diagnostique, converti en <code>CGImage</code> et affiché</td></tr>
+    <tr><td><code>buffer.data()</code> — n'existe pas côté Swift</td><td><code>buffer.__dataUnsafe()</code>, copié immédiatement dans un <code>Data</code> autonome</td></tr>
+    <tr><td>Aucune gestion de l'échelle d'écran</td><td><code>@Environment(\.displayScale)</code>, le moteur reçoit toujours des pixels physiques</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://www.swift.org/documentation/cxx-interop/">Swift.org — "Mixing Swift and C++"</a> — sections "Member Functions Returning References Are Unsafe by Default" et "Working with C++ Containers".<br>
+    <a href="https://developer.apple.com/documentation/coregraphics/cgimage/init(width:height:bitspercomponent:bitsperpixel:bytesperrow:space:bitmapinfo:provider:decode:shouldinterpolate:intent:)">CGImage — initialiseur depuis un buffer brut</a>.<br>
+    <a href="https://developer.apple.com/documentation/coregraphics/cgcolorspacecreatedevicergb()">CGColorSpaceCreateDeviceRGB()</a> — pourquoi l'espace périphérique est déconseillé.<br>
+    <a href="https://developer.apple.com/documentation/coregraphics/cgbitmapinfo/byteorder32big">CGBitmapInfo.byteOrder32Big</a> (déprécié 27.0) et <a href="https://developer.apple.com/documentation/coregraphics/cgimagebyteorderinfo">CGImageByteOrderInfo</a> (forme pérenne).<br>
+    <a href="https://developer.apple.com/documentation/swiftui/image/init(decorative:scale:orientation:)">SwiftUI — Image(decorative:scale:orientation:)</a>.<br>
+    <a href="https://developer.apple.com/documentation/swiftui/environmentvalues/displayscale">SwiftUI — EnvironmentValues.displayScale</a>.<br>
+    <a href="https://developer.apple.com/documentation/uikit/uiscreen/main">UIScreen.main</a> — déprécié depuis iOS/tvOS 26.0.<br>
+    <a href="https://developer.apple.com/documentation/foundation/data/init(bytes:count:)">Data.init(bytes:count:)</a> — copie immédiate recommandée par swift.org pour les pointeurs à durée de vie dépendante.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi cette leçon remplace-t-elle l'approche Metal/metal-cpp explorée précédemment ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce que Swift ARC et la gestion mémoire manuelle de metal-cpp sont fondamentalement incompatibles — aucun pont Objective-C++ ne peut réellement résoudre ce conflit, quelle que soit la plateforme visée</label>
+    <label><input type="radio" name="q1" value="b"> Parce que MTKView n'est disponible ni sur tvOS ni sur les simulateurs Apple TV, seulement sur un vrai boîtier connecté</label>
+    <label><input type="radio" name="q1" value="c"> Parce que l'objectif du moteur est la portabilité (desktop, Web) — toute API graphique spécifique à Apple, dont Metal, empêcherait le cœur du moteur de compiler ailleurs</label>
+    <label><input type="radio" name="q1" value="d"> Parce que le mode d'interop C++ du projet (SWIFT_OBJC_INTEROP_MODE) ne peut être activé que pour un seul framework graphique à la fois, et LyricsStore l'utilise déjà</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Pourquoi buffer.data() ne compile-t-il pas tel quel côté Swift ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce que std::uint8_t n'est pas directement représentable en Swift — il faudrait d'abord passer par un cast explicite vers CUnsignedChar avant tout accès</label>
+    <label><input type="radio" name="q2" value="b"> Parce que le pointeur retourné pointe à l'intérieur de l'objet C++ (this) — Swift juge ça potentiellement dangereux et renomme la méthode en __dataUnsafe() pour le signaler</label>
+    <label><input type="radio" name="q2" value="c"> Parce que data() est une méthode const, et Swift n'importe que les méthodes non-const des types C++ auto-contenus</label>
+    <label><input type="radio" name="q2" value="d"> Parce que PixelBuffer n'a pas explicitement conformé au protocole CxxRandomAccessCollection nécessaire pour exposer ses données</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi appelle-t-on Data(bytes: base, count:) immédiatement après __dataUnsafe(), plutôt que de garder le pointeur brut plus longtemps ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que CGDataProvider(data:) exige un CFData obtenu uniquement depuis un type Data, et refuse tout UnsafePointer passé directement</label>
+    <label><input type="radio" name="q3" value="b"> Parce qu'un UnsafePointer&lt;UInt8&gt; ne peut techniquement pas être stocké dans une propriété @State, contrairement à un Data</label>
+    <label><input type="radio" name="q3" value="c"> Parce que CGImage exige que ses données sources soient Sendable, ce qu'un pointeur C++ brut n'est jamais</label>
+    <label><input type="radio" name="q3" value="d"> Pour copier le contenu et rendre l'accès autonome, avant que buffer ne soit redimensionné ou détruit — la recommandation explicite de swift.org pour ce genre de pointeur à durée de vie dépendante</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. Pourquoi utiliser CGColorSpace.sRGB plutôt que CGColorSpaceCreateDeviceRGB() ?</p>
+    <label><input type="radio" name="q4" value="a"> L'espace dépendant du périphérique n'est pas transformé à l'affichage — les couleurs varient d'un écran à l'autre, Apple le déconseille explicitement quand la fidélité des couleurs compte</label>
+    <label><input type="radio" name="q4" value="b"> Parce que CGColorSpaceCreateDeviceRGB() a été retiré des SDK iOS/tvOS 26 ; seule la variante sRGB reste disponible aujourd'hui</label>
+    <label><input type="radio" name="q4" value="c"> Parce qu'un espace périphérique impose obligatoirement 16 bits par composante, incompatible avec le buffer RGBA8 du moteur</label>
+    <label><input type="radio" name="q4" value="d"> Parce que sRGB active automatiquement la correction gamma nécessaire pour que le damier de test reste visible sur un écran HDR</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">5. Le damier du motif de test apparaît en rouge au lieu de bleu à l'écran. Que faut-il vérifier en premier ?</p>
+    <label><input type="radio" name="q5" value="a"> Que displayScale est bien récupéré via @Environment — une valeur par défaut incorrecte décalerait les canaux de couleur d'une position</label>
+    <label><input type="radio" name="q5" value="b"> Que bytesPerRow correspond bien à largeur × 4 — un mauvais alignement de ligne peut faire apparaître les couleurs dans le mauvais ordre</label>
+    <label><input type="radio" name="q5" value="c"> L'ordre des canaux dans bitmapInfo (RGBA vs BGRA) — le canal bleu du C++ est probablement lu comme le canal rouge côté CoreGraphics</label>
+    <label><input type="radio" name="q5" value="d"> Que sizeInBytes() correspond bien à width × height × 4 — une taille de buffer insuffisante tronquerait le canal bleu en priorité</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">6. Que dit précisément la documentation Apple sur UIScreen.main, pour la cible de ce projet (iOS/tvOS 26) ?</p>
+    <label><input type="radio" name="q6" value="a"> Qu'il est déprécié depuis iOS/tvOS 18.0, bien avant la cible actuelle du projet — donc déjà obsolète à l'écriture des toutes premières leçons</label>
+    <label><input type="radio" name="q6" value="b"> Qu'il est déprécié depuis iOS/tvOS 26.0, et qu'il faut passer par une instance UIScreen trouvée via le contexte (ou @Environment(\.displayScale) en SwiftUI pur)</label>
+    <label><input type="radio" name="q6" value="c"> Qu'il continue de fonctionner normalement, la dépréciation ne concernant que sa variante déclinée pour Mac Catalyst</label>
+    <label><input type="radio" name="q6" value="d"> Qu'il faut désormais passer exclusivement par GeometryReader pour obtenir l'échelle d'affichage, y compris en dehors de SwiftUI</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">7. Pourquoi le motif de test combine-t-il un dégradé et un damier plutôt qu'un simple aplat de couleur ?</p>
+    <label><input type="radio" name="q7" value="a"> Un aplat ne révélerait ni une inversion largeur/hauteur, ni un bytesPerRow incorrect, ni un ordre de canaux inversé — le dégradé et le damier rendent chacune de ces trois erreurs visible séparément</label>
+    <label><input type="radio" name="q7" value="b"> Parce qu'un CGImage construit à partir d'une couleur unique déclenche systématiquement une erreur de validation dans CGDataProvider</label>
+    <label><input type="radio" name="q7" value="c"> Parce que fillTestPattern() est le seul nom de méthode reconnu automatiquement par l'interop C++ pour peupler un buffer de pixels</label>
+    <label><input type="radio" name="q7" value="d"> Parce qu'un aplat de couleur ne permettrait pas de vérifier que displayScale a bien été appliqué avant l'appel à resize()</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">L'image ne s'affiche pas du tout (ProgressView reste affiché indéfiniment) ? Place un breakpoint dans render(pointSize:scale:) et vérifie lequel des guard let échoue en premier — CGDataProvider(data:) ou CGColorSpace(name:) sont les deux candidats les plus probables si pixels est vide ou si le nom de l'espace colorimétrique est mal orthographié. Pose la question avec le guard exact qui échoue.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0036-cpp-collection-paroles-moteur.html">← Leçon 36 : le moteur C++ reçoit les paroles</a></span>
+    <span><a href="0038-texte-glyphes-stb-truetype.html">Leçon 38 : du pixel au glyphe, le premier vrai texte →</a></span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

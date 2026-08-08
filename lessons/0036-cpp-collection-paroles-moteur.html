@@ -172,6 +172,10 @@ struct DiscoveryView: View {
 }</code></pre>
   <p>Dans Xcode : sélectionne <code>LyricsTimingCheck.hpp</code> et <code>LyricsTimingCheck.cpp</code> dans le groupe <code>Engine</code> → <em>Delete</em> → <em>Move to Trash</em> (pas seulement "Remove Reference", pour ne pas laisser les fichiers traîner sur le disque).</p>
 
+  <div class="mission-tie">
+    <strong>État réel de l'implémentation (comparé le 8 août 2026) :</strong> <code>LyricsStore</code> et son câblage dans <code>FullScreenPlayerViewModel</code> correspondent exactement à ce qu'enseigne cette leçon — <code>sendLyricsToEngine()</code>, le cast <code>std.string(_:)</code> et l'assert sont tous présents tels quels. Aucune correction nécessaire.
+  </div>
+
   <div class="verify-scenario">
     <strong>Scénario de vérification, étape par étape :</strong>
     <ol>
@@ -279,7 +283,7 @@ struct DiscoveryView: View {
 
   <div class="lesson-nav">
     <span><a href="0035-cpp-interop-mecanisme.html">← Leçon 35 : ajouter du C++ à Karamock, le mécanisme</a></span>
-    <span>Leçon suivante : à venir (le canvas Metal, via metal-cpp)</span>
+    <span><a href="0037-canvas-logiciel-buffer-pixels.html">Leçon 37 : le canvas logiciel, du buffer C++ à l'écran →</a></span>
   </div>
 
 </div>
