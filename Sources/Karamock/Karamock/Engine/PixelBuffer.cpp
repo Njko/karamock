@@ -32,6 +32,30 @@ void PixelBuffer::fillTestPattern() {
     }
 }
 
+void PixelBuffer::fill(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+    for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+            const std::size_t i = (static_cast<std::size_t>(y) * width_ + x) * 4;
+            pixels_[i + 0] = r;
+            pixels_[i + 1] = g;
+            pixels_[i + 2] = b;
+            pixels_[i + 3] = 255;
+        }
+    }
+}
+
+void PixelBuffer::blendPixel(int x, int y, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t coverage) {
+    if (x < 0 || y < 0 || x >= width_ || y >= height_) {
+        return;
+    }
+    
+    const std::size_t i = (static_cast<std::size_t>(y) * width_ + x) * 4;
+    const int inv = 255 - coverage;
+    pixels_[i + 0] = static_cast<std::uint8_t>((r * coverage + pixels_[i + 0] * inv + 127) / 255);
+    pixels_[i + 1] = static_cast<std::uint8_t>((g * coverage + pixels_[i + 1] * inv + 127) / 255);
+    pixels_[i + 2] = static_cast<std::uint8_t>((b * coverage + pixels_[i + 2] * inv + 127) / 255);
+}
+
 int PixelBuffer::width() const { return width_; }
 int PixelBuffer::height() const { return height_; }
 int PixelBuffer::bytesPerRow() const { return width_ * 4; }
