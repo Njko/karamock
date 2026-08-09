@@ -30,8 +30,8 @@ struct FullScreenPlayerView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityLabel("Fermer")
             
-            LyricsView(lyrics: viewModel?.lyrics ?? placeholderLyrics, currentTime: progress)
-                .frame(height:160)
+            LyricsEngineView(lyricsStore: viewModel?.lyricsStore ?? karamock.LyricsStore(), currentTime: progress)
+                .frame(height: 160)
             
             VStack(spacing: 4) {
                 Text(song.title).font(.title2.bold())

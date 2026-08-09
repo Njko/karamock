@@ -12,7 +12,7 @@ import CxxStdlib
 @Observable
 final class FullScreenPlayerViewModel {
     private(set) var lyrics: [LyricsLine] = placeholderLyrics
-    private var lyricsStore = karamock.LyricsStore()
+    private(set) var lyricsStore = karamock.LyricsStore()
     
     private let song: Song
     private let fetchLyrics: FetchLyricsUseCase

@@ -29,6 +29,17 @@ void drawCentered(PixelBuffer& target, const Font& font, TextRenderer& renderer,
     renderer.drawText(target, font, text, x, baselineY, pixelHeight, color);
 }
 
+float clamp01(float t) {
+    if (t < 0.0f) return 0.0f;
+    if (t > 1.0f) return 1.0f;
+    return t;
+}
+
+float easeOutCubic(float t) {
+    const float u = 1.0f - t;
+    return 1.0f - u * u * u;
+}
+
 } // namespace
 
 void LyricsPage::render(PixelBuffer& target, const Font& font, TextRenderer& renderer, const LyricsStore& lyrics, double currentTime) const {
@@ -39,6 +50,8 @@ void LyricsPage::render(PixelBuffer& target, const Font& font, TextRenderer& ren
     
     constexpr float activeHeight = 56.0f;
     constexpr float sideHeight = 32.0f;
+    constexpr double transitionDuration = 0.5;
+    
     const Color activeColor{240, 240, 245};
     const Color sideColor = dim(activeColor);
     
@@ -46,15 +59,22 @@ void LyricsPage::render(PixelBuffer& target, const Font& font, TextRenderer& ren
     font.verticalMetrics(&ascent, &descent, &lineGap);
     const float lineAdvance = (ascent - descent + lineGap) * font.scaleForPixelsHeight(activeHeight);
     
+    const double elapsedSinceActive = currentTime - lyrics.timeAt(active);
+    const float progress = easeOutCubic(clamp01(static_cast<float>(elapsedSinceActive / transitionDuration)));
+    const float offset = (1.0f - progress) * lineAdvance;
+    
     const int centerY = target.height() / 2;
-    drawCentered(target, font, renderer, lyrics.textAt(active), centerY, activeHeight, activeColor);
+    drawCentered(target, font, renderer, lyrics.textAt(active),
+                 centerY + static_cast<int>(offset), activeHeight, activeColor);
     
     if (active > 0) {
-        drawCentered(target, font, renderer, lyrics.textAt(active - 1), centerY - static_cast<int>(lineAdvance), sideHeight, sideColor);
+        drawCentered(target, font, renderer, lyrics.textAt(active - 1),
+                     centerY - static_cast<int>(lineAdvance) + static_cast<int>(offset), sideHeight, sideColor);
     }
     
     if (active + 1 < lyrics.lineCount()) {
-        drawCentered(target, font, renderer, lyrics.textAt(active + 1), centerY + static_cast<int>(lineAdvance), sideHeight, sideColor);
+        drawCentered(target, font, renderer, lyrics.textAt(active + 1),
+                     centerY + static_cast<int>(lineAdvance) + static_cast<int>(offset), sideHeight, sideColor);
     }
 }
 

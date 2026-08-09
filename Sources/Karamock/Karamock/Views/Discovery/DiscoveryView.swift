@@ -12,9 +12,7 @@ struct DiscoveryView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    EngineProofView()
                     PlaylistSection(playlists: mockPlaylist)
-                    
                 }
                 .padding(.top)
             }
