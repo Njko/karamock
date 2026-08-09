@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 41 — Lisser la transition entre deux lignes, sans état supplémentaire</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 41 · Moteur de paroles en C++ (5/N)</p>
+  <h1>Lisser la transition entre deux lignes, sans état supplémentaire</h1>
+  <p class="subtitle">Depuis la Leçon 40, <code>currentTime</code> avance réellement et la ligne active de <code>LyricsPage</code> change seule — mais elle saute encore net d'une position à l'autre, sans transition. Cette leçon lisse ce mouvement, en dérivant tout de <code>currentTime</code> plutôt qu'en faisant mémoriser à <code>LyricsPage</code> ce qui se passait à l'appel précédent. Symétrie avec la leçon précédente : après une leçon entièrement Swift, celle-ci est entièrement C++ — un seul fichier change, <code>LyricsPage.cpp</code>, et sa signature publique ne bouge pas d'un caractère. Toujours pas branché à un vrai flux audio ; ça reste la vue de preuve, avec trois lignes de test.</p>
+
+  <h2>Le saut net, précisément</h2>
+  <p>Depuis la Leçon 39, <code>LyricsPage::render</code> place chaque ligne à une position figée, fonction uniquement de l'index actif :</p>
+  <pre><code>// État avant cette leçon
+drawCentered(target, font, renderer, lyrics.textAt(active), centerY, activeHeight, activeColor);
+if (active &gt; 0) {
+    drawCentered(target, font, renderer, lyrics.textAt(active - 1), centerY - lineAdvance, sideHeight, sideColor);
+}</code></pre>
+  <p>À l'instant précis où <code>indexAtTime</code> bascule d'une ligne à la suivante (Leçon 39), ces positions changent d'un coup, entre deux ticks de la Leçon 40 : une ligne encore "suivante" l'instant d'avant (à <code>centerY + lineAdvance</code>, petite, en retrait) devient "active" l'instant d'après (à <code>centerY</code>, grande, mise en avant) sans aucune position intermédiaire affichée.</p>
+
+  <h2>Une transition sans mémoire d'un appel à l'autre</h2>
+  <p>Tentation naturelle pour animer ce changement : faire retenir à <code>LyricsPage</code> l'index actif du dernier appel et l'instant où il a changé, dans un membre mutable. Ça marcherait, mais ça romprait une propriété que <code>LyricsPage::render</code> a depuis la Leçon 39 : c'est une fonction pure, son résultat ne dépend que de ses paramètres, jamais d'un appel précédent. Or l'information nécessaire existe déjà, sans rien mémoriser : <code>lyrics.timeAt(active)</code> donne l'instant exact où la ligne active a commencé — <code>currentTime - lyrics.timeAt(active)</code> donne donc directement "depuis combien de temps cette ligne est active", qu'il y ait eu un appel à <code>render()</code> une milliseconde plus tôt ou une minute plus tôt.</p>
+  <pre><code>// NOUVEAU — dans render(), après avoir trouvé active
+const double elapsedSinceActive = currentTime - lyrics.timeAt(active);</code></pre>
+  <p>Ce n'est jamais négatif : <code>indexAtTime</code> ne renvoie <code>active</code> que si <code>currentTime &gt;= lyrics.timeAt(active)</code> (Leçon 39), par construction.</p>
+
+  <h2>L'easing : la fonction qui donne le fondu</h2>
+  <p>Une interpolation linéaire (vitesse constante du début à la fin) donnerait un mouvement mécanique, perceptible comme artificiel. La pratique établie pour un mouvement d'interface qui "se pose" plutôt que de s'arrêter net — popularisée par les équations d'easing de Robert Penner, aujourd'hui un standard de fait en animation d'interface — est une fonction qui démarre vite et ralentit en approchant sa cible :</p>
+  <pre><code>// NOUVEAU — dans l'espace de noms anonyme de LyricsPage.cpp
+float clamp01(float t) {
+    if (t &lt; 0.0f) return 0.0f;
+    if (t &gt; 1.0f) return 1.0f;
+    return t;
+}
+
+float easeOutCubic(float t) {
+    const float u = 1.0f - t;
+    return 1.0f - u * u * u;
+}</code></pre>
+  <p><code>clamp01</code> avant l'easing n'est pas une précaution superflue : <code>elapsedSinceActive</code> dépasse largement <code>transitionDuration</code> la plupart du temps qu'une ligne reste active (la transition ne dure qu'une fraction de seconde, la ligne reste active plusieurs secondes) — sans ce plafond à <code>1.0</code>, <code>t</code> dépasserait <code>1</code>, <code>easeOutCubic</code> donnerait un résultat supérieur à <code>1</code>, et l'offset calculé plus bas deviendrait négatif : les lignes dépasseraient leur position finale au lieu de s'y arrêter.</p>
+
+  <h2>Le calcul de l'offset : un seul décalage, appliqué aux trois lignes</h2>
+  <pre><code>// CORRECTION — Engine/LyricsPage.cpp (fonction render)
+void LyricsPage::render(PixelBuffer&amp; target, const Font&amp; font, TextRenderer&amp; renderer,
+                         const LyricsStore&amp; lyrics, double currentTime) const {
+    const std::size_t active = lyrics.indexAtTime(currentTime);
+    if (active == LyricsStore::npos) {
+        return;
+    }
+
+    constexpr float activeHeight = 56.0f;
+    constexpr float sideHeight = 32.0f;
+    constexpr double transitionDuration = 0.5;   // NOUVEAU — secondes
+
+    const Color activeColor{240, 240, 245};
+    const Color sideColor = dim(activeColor);
+
+    int ascent = 0, descent = 0, lineGap = 0;
+    font.verticalMetrics(&amp;ascent, &amp;descent, &amp;lineGap);
+    const float lineAdvance = (ascent - descent + lineGap) * font.scaleForPixelsHeight(activeHeight);
+
+    const double elapsedSinceActive = currentTime - lyrics.timeAt(active);   // NOUVEAU
+    const float progress = easeOutCubic(clamp01(static_cast&lt;float&gt;(elapsedSinceActive / transitionDuration)));   // NOUVEAU
+    const float offset = (1.0f - progress) * lineAdvance;   // NOUVEAU
+
+    const int centerY = target.height() / 2;
+    drawCentered(target, font, renderer, lyrics.textAt(active),
+                 centerY + static_cast&lt;int&gt;(offset), activeHeight, activeColor);
+
+    if (active &gt; 0) {
+        drawCentered(target, font, renderer, lyrics.textAt(active - 1),
+                     centerY - static_cast&lt;int&gt;(lineAdvance) + static_cast&lt;int&gt;(offset), sideHeight, sideColor);
+    }
+    if (active + 1 &lt; lyrics.lineCount()) {
+        drawCentered(target, font, renderer, lyrics.textAt(active + 1),
+                     centerY + static_cast&lt;int&gt;(lineAdvance) + static_cast&lt;int&gt;(offset), sideHeight, sideColor);
+    }
+}</code></pre>
+  <p>Le même <code>offset</code> s'ajoute aux trois lignes — pas un décalage différent calculé pour chacune. C'est précisément ce qui garantit la continuité au moment du changement de ligne active : juste avant que <code>active</code> ne change (offset revenu à <code>0</code>, ancienne transition terminée), la future ligne active était affichée en position "suivante", à <code>centerY + lineAdvance</code>. Juste après le changement (<code>progress = 0</code>, <code>offset = lineAdvance</code>), le calcul la replace à <code>centerY + lineAdvance</code> — <strong>exactement la même position</strong>, avant de la faire remonter vers <code>centerY</code> à mesure que <code>progress</code> avance vers <code>1</code>. Aucun saut au moment de la bascule, sans que la fonction n'ait eu besoin de savoir qu'une bascule venait d'avoir lieu.</p>
+  <p>Ce que cette leçon ne fait délibérément pas : <code>activeColor</code>, <code>sideColor</code>, <code>activeHeight</code> et <code>sideHeight</code> restent assignés net selon le rôle final de chaque ligne, sans fondu. Une ligne qui devient active change de couleur et de taille instantanément au moment de la bascule ; seule sa <em>position</em> est lissée. Un fondu de couleur et de taille est un raffinement possible, distinct de ce que résout <code>elapsedSinceActive</code>, volontairement laissé de côté plutôt que traité en passant ici.</p>
+  <p>Aucun autre fichier ne change. La signature publique de <code>LyricsPage::render</code> est identique à la Leçon 39 — <code>EngineProofView.swift</code> et le bridging header n'ont rien à recompiler d'autre que <code>LyricsPage.cpp</code> lui-même.</p>
+
+  <div class="mission-tie">
+    <strong>État réel de l'implémentation (comparé le 9 août 2026) :</strong> conforme dans l'ensemble — <code>clamp01</code>, <code>easeOutCubic</code> et le calcul d'<code>offset</code> correspondent exactement à ce qu'enseigne cette leçon. Un seul écart, corrigé ci-dessus : <code>transitionDuration</code> vaut <code>0.5</code> dans le code réel, pas <code>0.3</code> — la leçon citait une valeur plausible mais non vérifiée avant la publication du vrai fichier.
+  </div>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build (⌘B) sur un simulateur iPhone <strong>et</strong> un simulateur Apple TV — aucun fichier Swift ni bridging header n'a changé, seule la recompilation C++ est attendue.</li>
+      <li>Ouvre l'écran Découvrir : chaque changement de ligne active doit maintenant glisser verticalement au lieu de sauter net, sur environ 0,5 seconde.</li>
+      <li>Observe particulièrement le début de chaque transition : la ligne qui devient active ne doit démarrer ni plus haut ni plus bas que sa position "suivante" affichée l'instant d'avant — aucun micro-saut visible au moment précis de la bascule.</li>
+      <li>Vérifie que la couleur et la taille, elles, changent bien net au moment de la bascule — pas de fondu progressif attendu sur ces deux propriétés à ce stade.</li>
+      <li>Change temporairement <code>transitionDuration</code> à <code>2.0</code> (bien plus long que l'écart de deux secondes entre les lignes de test) : observe que le mouvement ne se stabilise jamais complètement avant la bascule suivante — puis remets <code>0.5</code>.</li>
+      <li>Retire temporairement l'appel à <code>clamp01</code> (passe directement <code>elapsedSinceActive / transitionDuration</code> à <code>easeOutCubic</code>) : observe le dépassement de position après la fin de chaque transition, puis remets <code>clamp01</code>.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td>Position figée, fonction uniquement de l'index actif</td><td>Position lissée sur <code>transitionDuration</code>, dérivée de <code>currentTime - lyrics.timeAt(active)</code></td></tr>
+    <tr><td>Aucune fonction d'easing dans le moteur</td><td><code>clamp01</code> + <code>easeOutCubic</code>, réutilisables pour de futures animations</td></tr>
+    <tr><td>Changement de ligne active : saut net, en position, couleur et taille</td><td>Position lissée ; couleur et taille encore nettes (scope explicitement limité)</td></tr>
+    <tr><td><code>LyricsPage::render</code> : déjà sans état mutable</td><td>Toujours sans état mutable — le lissage se calcule sans rien mémoriser d'un appel à l'autre</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://easings.net/#easeOutCubic">easings.net — easeOutCubic</a> — formule exacte, courbe de référence, famille complète des équations d'easing dérivées des travaux de Robert Penner.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi le lissage n'exige-t-il aucun état mutable supplémentaire dans LyricsPage (pas de "dernier index actif" mémorisé entre deux appels) ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce que Swift/C++ interop interdit à toute classe exposée au bridging header de posséder un membre mutable non-const</label>
+    <label><input type="radio" name="q1" value="b"> Parce que TimelineView, introduit en Leçon 40, mémorise déjà cette information côté Swift et la transmet à chaque appel</label>
+    <label><input type="radio" name="q1" value="c"> lyrics.timeAt(active) donne directement l'instant où la ligne active a commencé — currentTime - lyrics.timeAt(active) suffit à calculer depuis quand elle est active, sans avoir besoin de se souvenir de l'appel précédent ; render() reste une fonction pure de ses paramètres</label>
+    <label><input type="radio" name="q1" value="d"> Parce qu'un membre mutable romprait la règle établie en Leçon 39 selon laquelle LyricsStore doit rester const dans render()</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Pourquoi clamp01 est-il nécessaire avant d'appeler easeOutCubic, alors qu'elapsedSinceActive ne peut jamais être négatif ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce qu'easeOutCubic accède à un tableau interne indexé par t, qui provoquerait un accès hors bornes sans ce plafond</label>
+    <label><input type="radio" name="q2" value="b"> elapsedSinceActive dépasse largement transitionDuration la plupart du temps qu'une ligne reste active — sans plafond à 1.0, t dépasserait 1, easeOutCubic renverrait plus de 1, et l'offset calculé deviendrait négatif : les lignes dépasseraient leur position finale au lieu de s'y arrêter</label>
+    <label><input type="radio" name="q2" value="c"> Parce que static_cast&lt;float&gt; échouerait silencieusement pour toute valeur double supérieure à transitionDuration</label>
+    <label><input type="radio" name="q2" value="d"> Parce que le compilateur refuse d'optimiser une expression contenant une division non plafonnée en amont d'un appel de fonction</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi le même offset est-il ajouté aux trois lignes (active, précédente, suivante), plutôt qu'un décalage calculé séparément pour chacune ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que calculer trois offsets distincts dépasserait le budget de calcul raisonnable pour un rendu à 10 Hz établi en Leçon 40</label>
+    <label><input type="radio" name="q3" value="b"> Parce que drawCentered n'accepte qu'un seul paramètre de décalage vertical par appel à render(), partagé entre toutes les lignes</label>
+    <label><input type="radio" name="q3" value="c"> Parce que Font::verticalMetrics ne peut être interrogée qu'une seule fois par appel à render()</label>
+    <label><input type="radio" name="q3" value="d"> Un décalage uniforme garantit la continuité exacte au moment de la bascule : la ligne qui devient active était affichée l'instant d'avant à sa position "suivante" (centerY + lineAdvance) ; avec cet offset, elle redémarre sa transition exactement de cette même position, sans saut visible</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. Pourquoi la couleur et la taille de chaque ligne changent-elles encore net au moment de la bascule, alors que la position est désormais lissée ?</p>
+    <label><input type="radio" name="q4" value="a"> Scope volontairement limité à la position pour cette leçon — un fondu de couleur et de taille est un raffinement distinct de ce que résout elapsedSinceActive, laissé de côté plutôt que traité en passant</label>
+    <label><input type="radio" name="q4" value="b"> Parce que blendPixel, établi en Leçon 38, ne peut interpoler que des coordonnées de position, jamais des composantes de couleur</label>
+    <label><input type="radio" name="q4" value="c"> Parce que Color est un type C++ immuable une fois construit, sans opérateur d'interpolation possible</label>
+    <label><input type="radio" name="q4" value="d"> Parce que activeHeight et sideHeight sont des constexpr, et qu'une valeur constexpr ne peut jamais varier au sein d'un même appel à render()</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">5. Pourquoi choisir une fonction d'ease-out (easeOutCubic) plutôt qu'une interpolation linéaire pour cette transition ?</p>
+    <label><input type="radio" name="q5" value="a"> Parce qu'une interpolation linéaire ne peut techniquement pas être exprimée avec des types float en C++</label>
+    <label><input type="radio" name="q5" value="b"> Parce que TextRenderer::drawText refuserait un offset calculé par interpolation linéaire, pour des raisons de précision de rastérisation</label>
+    <label><input type="radio" name="q5" value="c"> Une interpolation linéaire garde une vitesse constante du début à la fin, perçue comme mécanique pour un mouvement d'interface ; une fonction ease-out démarre vite et ralentit en approchant sa cible, un mouvement qui "se pose" plutôt que de s'arrêter net — une pratique établie depuis les équations d'easing de Robert Penner</label>
+    <label><input type="radio" name="q5" value="d"> Parce qu'easeOutCubic est strictement plus rapide à calculer qu'une simple multiplication linéaire sur les plateformes ciblées par ce projet</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">6. Pourquoi LyricsPage::render reste-t-elle une méthode const, sans aucun membre mutable ajouté pour implémenter ce lissage ?</p>
+    <label><input type="radio" name="q6" value="a"> Parce que le mot-clé const est requis par le bridging header dès qu'une méthode C++ est appelée plus d'une fois depuis Swift</label>
+    <label><input type="radio" name="q6" value="b"> Tout le calcul du lissage dérive de valeurs déjà disponibles en paramètre (currentTime, lyrics.timeAt(active)) — rien à retenir d'un appel à l'autre, donc aucun état interne n'est nécessaire, contrairement à ce qu'une approche mémorisant le dernier index actif et l'instant du changement aurait exigé</label>
+    <label><input type="radio" name="q6" value="c"> Parce qu'un membre mutable empêcherait TimelineView, établi en Leçon 40, de redessiner la vue à 10 Hz</label>
+    <label><input type="radio" name="q6" value="d"> Parce que TextRenderer&amp; étant déjà non-const dans la signature, un second paramètre non-const romprait la compilation avec l'interop objcxx</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">7. Que se passerait-il visuellement si transitionDuration était fixée à 2.0 secondes, avec des lignes de test espacées d'environ deux secondes (comme dans EngineProofView) ?</p>
+    <label><input type="radio" name="q7" value="a"> La transition vers une ligne serait systématiquement interrompue par la bascule vers la ligne suivante avant d'avoir fini de s'installer — offset ne retomberait jamais complètement à zéro, donnant une impression de mouvement permanent plutôt qu'une position de repos claire entre deux lignes</label>
+    <label><input type="radio" name="q7" value="b"> Le programme ne compilerait plus, transitionDuration devant obligatoirement rester strictement inférieure à l'écart minimal entre deux lignes consécutives</label>
+    <label><input type="radio" name="q7" value="c"> LyricsPage::render retournerait systématiquement sans rien dessiner dès que transitionDuration dépasse l'écart entre deux timestamps</label>
+    <label><input type="radio" name="q7" value="d"> clamp01 forcerait progress à rester à 0 en permanence, empêchant toute transition de démarrer</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">La transition se lisse bien mais un léger tremblement apparaît sur la position finale, comme si les lignes n'arrivaient jamais parfaitement immobiles ? Vérifie d'abord que <code>offset</code> atteint bien exactement <code>0</code> une fois <code>progress</code> à <code>1</code> (et non une valeur résiduelle due à l'arrondi <code>static_cast&lt;int&gt;</code>) avant de creuser plus loin — pose la question avec la valeur observée de <code>offset</code> en fin de transition si le tremblement persiste après cette vérification.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0040-source-temps-continue-timelineview.html">← Leçon 40 : une source de temps continue, sans interpolation</a></span>
+    <span><a href="0042-integration-lecteur-plein-ecran.html">Leçon 42 : sortir de la vue de preuve, le moteur dans le vrai lecteur →</a></span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

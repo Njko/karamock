@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Leçon 42 — Sortir de la vue de preuve : le moteur dans le vrai lecteur</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="lesson">
+
+  <p class="lesson-kicker">Leçon 42 · Moteur de paroles en C++ (6/N)</p>
+  <h1>Sortir de la vue de preuve : le moteur dans le vrai lecteur</h1>
+  <p class="subtitle">Depuis la Leçon 37, <code>EngineProofView</code> a rempli son rôle — prouver, étape par étape, que le moteur C++ sait recevoir des paroles, dessiner du texte, avancer dans le temps et lisser une transition. Elle vivait dans l'écran Découvrir, avec trois lignes de test et sa propre horloge fabriquée de toutes pièces. Cette leçon la fait sortir de là : le rendu C++ s'installe dans <code>FullScreenPlayerView</code>, l'écran de destination réel, alimenté par les vraies paroles récupérées par <code>FullScreenPlayerViewModel</code> et par la progression de lecture qui existe déjà dans cet écran depuis bien avant l'arrivée du moteur C++. Aucun changement côté C++ cette leçon — uniquement du réarrangement et du branchement Swift.</p>
+
+  <h2>Ce qui existe déjà côté écran réel, sans lien avec le moteur C++</h2>
+  <p><code>FullScreenPlayerView</code> affiche des paroles depuis la Leçon 5, bien avant que le moteur C++ n'existe — avec sa propre <code>LyricsView</code> SwiftUI (défilement de <code>Text</code>) et sa propre notion du temps qui passe :</p>
+  <pre><code>// État avant cette leçon — FullScreenPlayerView.swift
+@State private var progress: TimeInterval = 0
+private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+...
+LyricsView(lyrics: viewModel?.lyrics ?? placeholderLyrics, currentTime: progress)
+    .frame(height:160)
+...
+.onReceive(timer) { _ in
+    guard player.isPlaying, progress < song.durationInSeconds else { return }
+    progress += 0.5
+}</code></pre>
+  <p><code>progress</code> avance déjà, toutes les 0,5 seconde, tant que la lecture est active — une horloge de lecture simulée, pas encore reliée à un vrai flux audio, mais bien réelle du point de vue de l'écran. C'est précisément ce qui change la donne pour cette leçon : contrairement à <code>EngineProofView</code>, qui n'avait aucune source de temps externe et devait donc fabriquer la sienne (<code>TimelineView</code>, Leçon 40), <code>FullScreenPlayerView</code> a déjà tout ce qu'il faut.</p>
+
+  <h2>LyricsEngineView : la vue de preuve généralisée, pas réécrite</h2>
+  <p><code>EngineProofView</code> devient <code>LyricsEngineView</code> — déplacée de <code>Views/Discovery/</code> vers <code>Views/Player/FullScreenPlayer/</code>, et généralisée : <code>lyricsStore</code> et <code>currentTime</code> deviennent des paramètres fournis par l'appelant, plus jamais fabriqués en interne.</p>
+  <pre><code>// CORRECTION — Views/Discovery/EngineProofView.swift → Views/Player/FullScreenPlayer/LyricsEngineView.swift
+struct LyricsEngineView: View {
+    let lyricsStore: karamock.LyricsStore   // NOUVEAU — fourni par l'appelant, plus de testLines
+    let currentTime: TimeInterval           // NOUVEAU — fourni par l'appelant, plus de startDate
+
+    @Environment(\.displayScale) private var displayScale
+    @State private var fontData: Data?
+    @State private var size: CGSize = .zero   // NOUVEAU
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onGeometryChange(for: CGSize.self) { proxy in
+                proxy.size
+            } action: { newValue in
+                size = newValue
+            }
+            .task {
+                guard fontData == nil else { return }
+                guard let fontURL = Bundle.main.url(forResource: "NotoSans-Regular", withExtension: "ttf")
+                else { return }
+                fontData = try? Data(contentsOf: fontURL)
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let fontData, size.width &gt; 0, size.height &gt; 0,
+           let image = Self.render(pointSize: size, scale: displayScale, fontData: fontData,
+                                    lyricsStore: lyricsStore, currentTime: currentTime) {
+            Image(decorative: image, scale: displayScale)
+                .interpolation(.none)
+        } else {
+            ProgressView()
+        }
+    }
+
+    private static func render(pointSize: CGSize, scale: CGFloat, fontData: Data,
+                                lyricsStore: karamock.LyricsStore, currentTime: TimeInterval) -> CGImage? {
+        let pixelWidth  = Int((pointSize.width  * scale).rounded())
+        let pixelHeight = Int((pointSize.height * scale).rounded())
+        guard pixelWidth &gt; 0, pixelHeight &gt; 0 else { return nil }   // NOUVEAU
+
+        var font = karamock.Font()
+        guard loadFont(from: fontData, into: &amp;font) else { return nil }
+
+        var buffer = karamock.PixelBuffer()
+        buffer.resize(Int32(pixelWidth), Int32(pixelHeight))
+        buffer.fill(20, 20, 30)
+
+        var renderer = karamock.TextRenderer()
+        let page = karamock.LyricsPage()
+        page.render(&amp;buffer, font, &amp;renderer, lyricsStore, currentTime)
+
+        guard let base = buffer.__dataUnsafe() else { return nil }
+        let pixels = Data(bytes: base, count: buffer.sizeInBytes())
+
+        guard let provider = CGDataProvider(data: pixels as CFData),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+        else { return nil }
+
+        let bitmapInfo = CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                    | CGImageByteOrderInfo.order32Big.rawValue
+        )
+
+        return CGImage(
+            width: pixelWidth, height: pixelHeight,
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: Int(buffer.bytesPerRow()),
+            space: colorSpace, bitmapInfo: bitmapInfo, provider: provider,
+            decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        )
+    }
+
+    private static func loadFont(from data: Data, into font: inout karamock.Font) -> Bool {
+        data.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                return false
+            }
+            return font.loadFromMemory(baseAddress, rawBuffer.count)
+        }
+    }
+}</code></pre>
+
+  <h2>Pourquoi TimelineView disparaît, pas seulement se déplace</h2>
+  <p>Ce n'est pas un oubli : <code>LyricsEngineView</code> n'a plus de <code>TimelineView</code> ni de <code>startDate</code> du tout, contrairement à ce qu'on pourrait attendre en généralisant la Leçon 40. Une vue SwiftUI réévalue naturellement son <code>body</code> chaque fois qu'une de ses propriétés change — <code>currentTime</code> est désormais un <code>let</code> fourni par <code>FullScreenPlayerView</code>, qui change déjà lui-même toutes les 0,5 seconde via son propre <code>Timer.publish</code> établi bien avant cette leçon. Réintroduire une horloge indépendante dans <code>LyricsEngineView</code> ne ferait pas qu'être redondant : ça donnerait à l'écran <strong>deux</strong> notions du temps qui passe, sans aucune garantie qu'elles restent synchronisées. Généraliser une vue de preuve, ici, veut dire retirer une machinerie devenue inutile, pas seulement ajouter des paramètres.</p>
+
+  <h2>Mesurer l'espace réel : onGeometryChange, et l'ordre qui compte</h2>
+  <p><code>EngineProofView</code> utilisait un <code>pointSize</code> fixe (<code>320×200</code>, Leçon 37) — une taille choisie pour la démonstration, sans rapport avec un vrai écran. Dans <code>FullScreenPlayerView</code>, la zone de paroles ne contraint que la hauteur (<code>.frame(height: 160)</code>) ; la largeur doit remplir l'espace réellement disponible, qui varie selon l'appareil. <code>PixelBuffer::resize</code> a besoin de dimensions concrètes en pixels — il faut donc les mesurer, pas les inventer.</p>
+  <pre><code>.onGeometryChange(for: CGSize.self) { proxy in
+    proxy.size
+} action: { newValue in
+    size = newValue
+}</code></pre>
+  <p><code>onGeometryChange</code>, pas <code>GeometryReader</code> : <code>GeometryReader</code> s'insère comme une vue à part entière qui s'étend pour occuper tout l'espace qu'on lui propose, ce qui complique la disposition des vues autour de lui — un défaut assez répandu pour être documenté comme tel dans la communauté SwiftUI. <code>onGeometryChange</code> se contente d'observer la géométrie sans influencer le layout, et rapporte sa valeur dès l'apparition de la vue — pas seulement lors d'un changement ultérieur, contrairement à <code>.onChange(of:)</code> qui a besoin de <code>initial: true</code> pour ce même comportement.</p>
+  <p>Détail qui casse tout si l'ordre est inversé : <code>.frame(maxWidth: .infinity, maxHeight: .infinity)</code> est appliqué à <code>content</code> <strong>avant</strong> <code>.onGeometryChange</code>, jamais après.</p>
+  <pre><code>// Ordre qui compte
+content
+    .frame(maxWidth: .infinity, maxHeight: .infinity)   // 1. content s'étend d'abord
+    .onGeometryChange(for: CGSize.self) { ... }          // 2. puis on mesure l'espace occupé</code></pre>
+  <p>Sans cette expansion préalable, <code>onGeometryChange</code> mesurerait la taille <em>naturelle</em> de <code>content</code> à cet instant précis — celle, minuscule et centrée, d'un <code>ProgressView()</code> tant qu'aucune image n'existe encore — plutôt que l'espace réellement offert par le parent. Le résultat serait un <code>PixelBuffer</code> redimensionné à la taille d'un indicateur de chargement, pas à celle de la zone de paroles. L'ordre des modifiers détermine ce qui est mesuré, pas seulement ce qui s'affiche à l'écran.</p>
+
+  <h2>Brancher les vraies données</h2>
+  <p><code>lyricsStore</code> existe déjà dans <code>FullScreenPlayerViewModel</code> depuis la Leçon 36, mais reste privé — rien à côté de lui ne peut le lire :</p>
+  <pre><code>// CORRECTION — ViewModels/FullScreenPlayerViewModel.swift
+private(set) var lyricsStore = karamock.LyricsStore()   // était : private var lyricsStore</code></pre>
+  <p>Même principe déjà appliqué à <code>lyrics</code> (<code>private(set) var lyrics</code>, Leçon 36) : la lecture s'ouvre à l'extérieur, mais seule <code>sendLyricsToEngine()</code> — restée <code>private</code> — a le droit de le modifier, garantissant que son contenu reste synchronisé avec <code>lyrics</code>.</p>
+  <pre><code>// CORRECTION — Views/Player/FullScreenPlayer/FullScreenPlayerView.swift
+LyricsEngineView(lyricsStore: viewModel?.lyricsStore ?? karamock.LyricsStore(), currentTime: progress)
+    .frame(height: 160)</code></pre>
+  <p><code>viewModel?.lyricsStore ?? karamock.LyricsStore()</code> reprend exactement le principe de secours déjà utilisé pour <code>viewModel?.lyrics ?? placeholderLyrics</code> avant cette leçon — sauf qu'ici, le repli est un <code>LyricsStore</code> vide plutôt qu'un jeu de paroles de démonstration. Une différence de comportement réelle, à ne pas laisser filer sans l'expliquer : voir plus bas.</p>
+
+  <h2>Ce que cette intégration change, honnêtement</h2>
+  <p><code>viewModel</code> est assigné avant que <code>loadLyrics()</code> n'ait fini (<code>self.viewModel = viewModel; await viewModel.loadLyrics()</code>, établi bien avant cette leçon) — pendant cette fenêtre, <code>lyricsStore</code> est un <code>LyricsStore</code> tout juste construit, vide. <code>LyricsPage::render</code> (Leçon 39) interroge <code>indexAtTime</code> sur un store vide, reçoit <code>npos</code>, et ne dessine rien : le canvas reste uniment coloré, sans texte, le temps que <code>loadLyrics()</code> se termine. Avant cette leçon, <code>LyricsView</code> affichait immédiatement <code>placeholderLyrics</code> ("Chaque ligne a son propre horodatage"...) dans ce même intervalle — un vrai contenu visible, pas un canvas vide.</p>
+  <p>Cette régression reste étroite, pas permanente : <code>sendLyricsToEngine()</code> (Leçon 36) s'exécute après <code>loadLyrics()</code>, succès <strong>ou</strong> échec confondus — même les lignes de repli en cas d'erreur ("Connexion impossible. Réessayez", établies en amont de cette série de leçons) sont poussées dans <code>lyricsStore</code> comme n'importe quelle ligne réelle. Seule la fenêtre de chargement elle-même reste un canvas vide ; une fois <code>loadLyrics()</code> terminée, il y a toujours au moins une ligne à afficher, erreur ou pas. Ce trou de chargement est un gap réel, volontairement non comblé dans cette leçon — candidat naturel pour une leçon future, pas traité en passant ici.</p>
+
+  <h2>Deux vues devenues inutiles</h2>
+  <p><code>EngineProofView</code> a été conçue comme une vue de preuve temporaire depuis sa toute première apparition (Leçon 37) — sa fonction, démontrer que le moteur fonctionne, est maintenant remplie par l'intégration réelle ci-dessus. La garder à côté dans <code>DiscoveryView</code> dupliquerait la même logique de rendu que <code>LyricsEngineView</code>, avec le risque bien réel qu'elles divergent silencieusement au fil des prochaines leçons :</p>
+  <pre><code>// CORRECTION — Views/Discovery/DiscoveryView.swift
+NavigationStack {
+    ScrollView {
+        VStack(alignment: .leading, spacing: 24) {
+            PlaylistSection(playlists: mockPlaylist)   // EngineProofView() retirée
+        }
+        .padding(.top)
+    }
+    ...
+}</code></pre>
+  <p><code>Views/Player/FullScreenPlayer/LyricsView.swift</code> (le défilement <code>Text</code> de la Leçon 5) devient, lui aussi, du code mort : plus aucun appelant depuis que <code>FullScreenPlayerView</code> utilise <code>LyricsEngineView</code>. À supprimer plutôt qu'à laisser traîner — le garder entretiendrait une ambiguïté sur lequel des deux rendus de paroles fait réellement autorité dans l'app.</p>
+
+  <div class="mission-tie">
+    <strong>État réel de l'implémentation (comparé le 9 août 2026) :</strong> conforme exactement à ce qu'enseigne cette leçon — <code>LyricsEngineView</code> (structure, ordre <code>.frame(maxWidth:maxHeight:.infinity)</code> puis <code>.onGeometryChange</code>, garde <code>pixelWidth &gt; 0, pixelHeight &gt; 0</code>), le branchement dans <code>FullScreenPlayerView</code>, le retrait d'<code>EngineProofView()</code> de <code>DiscoveryView</code>, <code>private(set) var lyricsStore</code>, et la suppression de <code>LyricsView.swift</code> correspondent tous au vrai code. Aucun écart à corriger.
+  </div>
+
+  <div class="verify-scenario">
+    <strong>Scénario de vérification, étape par étape :</strong>
+    <ol>
+      <li>Build (⌘B) sur un simulateur iPhone <strong>et</strong> un simulateur Apple TV.</li>
+      <li>Ouvre l'écran Découvrir : plus aucune trace du moteur de paroles — seule la section playlists doit rester.</li>
+      <li>Ouvre une chanson jusqu'au lecteur plein écran : la zone de paroles doit maintenant afficher le rendu C++ (fond sombre, texte rastérisé), pas le défilement <code>Text</code> d'avant.</li>
+      <li>Lance la lecture : la ligne active doit changer et glisser au rythme de <code>progress</code>, exactement comme le faisait <code>LyricsView</code> avant cette leçon — mais rendu par le moteur C++.</li>
+      <li>Fais pivoter l'appareil ou teste sur un iPad en largeur différente : la zone de paroles doit occuper toute la largeur disponible, pas une bande de 320 points fixe.</li>
+      <li>Observe l'instant précis où l'écran s'ouvre, avant que les paroles ne soient chargées : le canvas doit rester vide un court instant, sans crash — le trou de chargement documenté plus haut, pas un bug à corriger ici.</li>
+    </ol>
+  </div>
+
+  <table class="compare-table">
+    <tr><th>Avant</th><th>Après</th></tr>
+    <tr><td><code>EngineProofView</code> : vue de preuve, trois lignes de test, sa propre horloge</td><td><code>LyricsEngineView</code> : intégrée à l'écran réel, vraies données, currentTime fourni par l'appelant</td></tr>
+    <tr><td><code>pointSize</code> fixe (320×200)</td><td>Taille mesurée via <code>onGeometryChange</code>, remplit l'espace réel offert</td></tr>
+    <tr><td><code>lyricsStore</code> privé dans <code>FullScreenPlayerViewModel</code></td><td><code>private(set)</code>, lisible par la vue</td></tr>
+    <tr><td><code>LyricsView</code> (SwiftUI, Leçon 5) affiche les paroles dans l'écran réel</td><td><code>LyricsEngineView</code> (moteur C++) affiche les paroles ; <code>LyricsView</code> devenue du code mort</td></tr>
+    <tr><td>Découvrir contient une démonstration du moteur</td><td>Découvrir ne contient plus que les playlists</td></tr>
+  </table>
+
+  <div class="source-box">
+    <div class="source-label">Source primaire recommandée</div>
+    <a href="https://developer.apple.com/documentation/swiftui/view/ongeometrychange(for:of:action:)">Apple Developer Documentation — onGeometryChange(for:of:action:)</a> — signature exacte, comportement au premier affichage.<br>
+    <a href="https://developer.apple.com/documentation/swiftui/view/onchange(of:initial:_:)-4psgg">Apple Developer Documentation — onChange(of:initial:_:)</a> — pour comparer avec le comportement par défaut, sans déclenchement initial.
+  </div>
+
+  <h2>Vérifie ta compréhension</h2>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">1. Pourquoi LyricsEngineView n'a-t-elle plus besoin de TimelineView, contrairement à EngineProofView en Leçon 40 ?</p>
+    <label><input type="radio" name="q1" value="a"> Parce que TimelineView est dépréciée dans ce contexte depuis que la vue reçoit un paramètre currentTime externe</label>
+    <label><input type="radio" name="q1" value="b"> Parce que FullScreenPlayerView appelle désormais LyricsEngineView.render() directement, sans passer par la hiérarchie de vues SwiftUI habituelle</label>
+    <label><input type="radio" name="q1" value="c"> currentTime est désormais un paramètre fourni par FullScreenPlayerView, qui possède déjà sa propre horloge (le Timer.publish simulant la progression de lecture) — réintroduire une horloge indépendante donnerait à l'écran deux notions du temps sans garantie qu'elles restent synchronisées ; body se réévalue naturellement à chaque nouvelle valeur reçue</label>
+    <label><input type="radio" name="q1" value="d"> Parce que karamock.LyricsStore gère lui-même l'écoulement du temps depuis l'ajout d'indexAtTime en Leçon 39</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">2. Pourquoi lyricsStore passe-t-il de private à private(set) dans FullScreenPlayerViewModel, plutôt qu'à public sans restriction ?</p>
+    <label><input type="radio" name="q2" value="a"> Parce que Swift interdit d'exposer un type C++ importé avec un niveau d'accès autre que private(set), quel que soit le contexte</label>
+    <label><input type="radio" name="q2" value="b"> Seule la lecture doit être exposée en dehors du ViewModel — exactement le principe déjà appliqué à lyrics (private(set) var lyrics) ; la modification doit rester le monopole de sendLyricsToEngine(), qui garantit que le contenu C++ reste synchronisé avec lyrics</label>
+    <label><input type="radio" name="q2" value="c"> Parce qu'une propriété public empêcherait @Observable de suivre les changements de lyricsStore correctement</label>
+    <label><input type="radio" name="q2" value="d"> Parce que LyricsEngineView a besoin d'appeler directement clear() et addLine() sur lyricsStore pour fonctionner</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">3. Pourquoi LyricsEngineView a-t-elle besoin de mesurer sa taille avec onGeometryChange, alors qu'EngineProofView utilisait un pointSize fixe depuis la Leçon 37 ?</p>
+    <label><input type="radio" name="q3" value="a"> Parce que karamock.PixelBuffer refuse désormais les dimensions codées en dur depuis l'ajout de LyricsPage en Leçon 39</label>
+    <label><input type="radio" name="q3" value="b"> Parce que displayScale ne peut plus être lu directement dans une vue qui reçoit des paramètres externes comme lyricsStore et currentTime</label>
+    <label><input type="radio" name="q3" value="c"> Parce que TimelineView, avant sa suppression, imposait elle-même une taille fixe à tout son contenu</label>
+    <label><input type="radio" name="q3" value="d"> La vue de preuve avait une taille arbitraire choisie pour la démonstration ; l'écran de destination réel ne contraint que la hauteur (.frame(height: 160)), la largeur doit remplir l'espace réellement disponible — sans mesure, PixelBuffer::resize recevrait des dimensions inventées plutôt que la taille réelle à l'écran</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="a">
+    <p class="quiz-question">4. Pourquoi .frame(maxWidth: .infinity, maxHeight: .infinity) doit-il être appliqué à content avant .onGeometryChange, et non après ?</p>
+    <label><input type="radio" name="q4" value="a"> Sans cette expansion préalable, onGeometryChange mesurerait la taille naturelle du contenu affiché à cet instant — celle, minuscule, d'un ProgressView tant qu'aucune image n'existe — plutôt que l'espace réellement offert par le parent ; l'ordre des modifiers détermine ce qui est mesuré, pas seulement ce qui s'affiche</label>
+    <label><input type="radio" name="q4" value="b"> Parce que SwiftUI applique toujours les modifiers .frame dans l'ordre inverse de leur écriture, quel que soit le modifier qui suit</label>
+    <label><input type="radio" name="q4" value="c"> Parce que onGeometryChange exige explicitement qu'un .frame(maxWidth:maxHeight:) précède son appel, sous peine d'erreur de compilation</label>
+    <label><input type="radio" name="q4" value="d"> Parce que ProgressView() ne peut techniquement pas être mesurée par onGeometryChange, quel que soit l'ordre des modifiers</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="c">
+    <p class="quiz-question">5. Pourquoi onGeometryChange est-il préféré à GeometryReader pour cette mesure ?</p>
+    <label><input type="radio" name="q5" value="a"> Parce que GeometryReader est dépréciée depuis la version de SwiftUI ciblée par ce projet</label>
+    <label><input type="radio" name="q5" value="b"> Parce que GeometryReader ne peut pas être combinée avec Image(decorative:scale:) dans la même hiérarchie de vues</label>
+    <label><input type="radio" name="q5" value="c"> GeometryReader s'insère comme une vue à part entière qui s'étend pour occuper tout l'espace proposé, compliquant la disposition des vues autour de lui ; onGeometryChange se contente d'observer la géométrie sans influencer le layout, et rapporte sa valeur dès l'apparition de la vue, sans code supplémentaire pour amorcer la première mesure</label>
+    <label><input type="radio" name="q5" value="d"> Parce que seul onGeometryChange peut être utilisé à l'intérieur d'un @ViewBuilder, contrairement à GeometryReader</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="b">
+    <p class="quiz-question">6. Pourquoi le canvas reste-t-il vide seulement pendant la fenêtre de chargement, et non indéfiniment en cas d'erreur réseau ?</p>
+    <label><input type="radio" name="q6" value="a"> Parce que LyricsError.network déclenche un fallback automatique vers placeholderLyrics, converti en LyricsStore par LyricsEngineView elle-même</label>
+    <label><input type="radio" name="q6" value="b"> sendLyricsToEngine() s'exécute après loadLyrics(), succès ou échec confondus — même les lignes de repli en cas d'erreur sont poussées dans lyricsStore comme n'importe quelle ligne réelle ; seule la fenêtre entre le début du chargement et la fin de loadLyrics() laisse lyricsStore vide</label>
+    <label><input type="radio" name="q6" value="c"> Parce que indexAtTime retourne automatiquement 0 plutôt que npos dès qu'une erreur LyricsError est levée</label>
+    <label><input type="radio" name="q6" value="d"> Parce que karamock.LyricsStore() par défaut contient toujours une ligne vide implicite à l'index 0</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <div class="quiz" data-answer="d">
+    <p class="quiz-question">7. Pourquoi retirer EngineProofView() de DiscoveryView plutôt que la laisser à côté de la nouvelle intégration ?</p>
+    <label><input type="radio" name="q7" value="a"> Parce que Xcode refuse de compiler deux vues distinctes utilisant toutes deux karamock.PixelBuffer dans la même target</label>
+    <label><input type="radio" name="q7" value="b"> Parce que DiscoveryView et FullScreenPlayerView ne peuvent pas charger la même police NotoSans-Regular.ttf simultanément</label>
+    <label><input type="radio" name="q7" value="c"> Parce que le moteur C++ ne supporte qu'une seule instance de LyricsPage active à la fois dans toute l'application</label>
+    <label><input type="radio" name="q7" value="d"> EngineProofView a été conçue comme une vue de preuve temporaire depuis la Leçon 37 — sa fonction est maintenant remplie par l'intégration réelle ; la garder dupliquerait la même logique de rendu que LyricsEngineView, avec le risque qu'elles divergent silencieusement au fil des prochaines leçons</label>
+    <button class="quiz-check">Vérifier</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <p class="ask-teacher">Le canvas C++ s'affiche bien dans le lecteur plein écran, mais reste vide même après la fin du chargement des paroles ? Vérifie d'abord que <code>viewModel?.lyricsStore</code> est bien lu <em>après</em> l'assignation de <code>self.viewModel</code> dans le <code>.task(id: song.id)</code> de <code>FullScreenPlayerView</code> — un ordre inversé laisserait la vue capturer un ViewModel encore nil au moment du premier rendu. Pose la question avec le résultat observé si le canvas reste vide après cette vérification.</p>
+
+  <div class="lesson-nav">
+    <span><a href="0041-transition-lissee-easing.html">← Leçon 41 : lisser la transition entre deux lignes, sans état supplémentaire</a></span>
+    <span>Leçon suivante : à venir</span>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
