@@ -14,7 +14,10 @@ namespace karamock {
 void PixelBuffer::resize(int width, int height) {
     width_ = width > 0 ? width : 0;
     height_ = height > 0 ? height : 0;
-    pixels_.assign(static_cast<std::size_t>(width_) * height_ * 4, 0);
+    const std::size_t needed = static_cast<std::size_t>(width_) * height_ * 4;
+    if (pixels_.capacity() < needed) {
+        pixels_.resize(needed);
+    }
 }
 
 void PixelBuffer::fillTestPattern() {
