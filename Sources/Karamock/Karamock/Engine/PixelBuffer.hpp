@@ -24,6 +24,7 @@ public:
     int bytesPerRow() const;
     std::size_t sizeInBytes() const;
     const std::uint8_t* data() const;
+    void copyPixels(std::uint8_t* destination, std::size_t capacity) const;
     void fill(std::uint8_t r, std::uint8_t g, std::uint8_t b);
     void blendPixel(int x, int y,
                     std::uint8_t r, std::uint8_t g, std::uint8_t b,

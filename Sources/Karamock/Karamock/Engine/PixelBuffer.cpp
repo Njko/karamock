@@ -6,6 +6,8 @@
 //
 
 #include "PixelBuffer.hpp"
+#include <algorithm>
+#include <cstring>
 
 namespace karamock {
 
@@ -61,4 +63,14 @@ int PixelBuffer::height() const { return height_; }
 int PixelBuffer::bytesPerRow() const { return width_ * 4; }
 std::size_t PixelBuffer::sizeInBytes() const { return pixels_.size(); }
 const std::uint8_t* PixelBuffer::data() const { return pixels_.data(); }
+
+void PixelBuffer::copyPixels(std::uint8_t* destination, std::size_t capacity) const {
+    if (destination == nullptr) {
+        return;
+    }
+    const std::size_t n = std::min(capacity, pixels_.size());
+    if (n > 0) {
+        std::memcpy(destination, pixels_.data(), n);
+    }
+}
 }
