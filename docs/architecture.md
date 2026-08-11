@@ -1,6 +1,6 @@
 # Architecture de Karamock
 
-> Document de référence décrivant le fonctionnement interne de l'application — écrans, couches, appels réseau, concurrence Swift 6 et moteur de rendu C++. Rédigé à partir du code réel du dépôt (état au 11 août 2026).
+> Document de référence décrivant le fonctionnement interne de l'application — écrans, couches, appels réseau, concurrence Swift 6 et moteur de rendu C++. Rédigé à partir du code réel du dépôt (état au 11 août 2026, §9/§13 rafraîchies après le batch de correctifs de performance du 10 août 2026).
 
 ## Sommaire
 
@@ -60,7 +60,7 @@ flowchart TD
 | `SongOptionsSheet` | `.../SongOptionSheet/SongOptionsSheet.swift` | Choix Karaoké/Battle, chanteur, pitch/tempo, téléchargement | `SongOptionsViewModel` | `.sheet(item:)` depuis Library et PlaylistDetail |
 | `LibraryView` | `Views/Library/LibraryView.swift` | Onglet "Bibliothèque" : chansons téléchargées | `LibraryViewModel` (`@InjectedObservable`) | Onglet 2, `NavigationStack` propre |
 | `FullScreenPlayerView` | `Views/Player/FullScreenPlayer/FullScreenPlayerView.swift` | Lecteur plein écran : paroles, scrub, transport | `FullScreenPlayerViewModel` | `.fullScreenCover` (iOS) / `.navigationDestination(isPresented:)` (tvOS) |
-| `LyricsEngineView` | `Views/Player/FullScreenPlayer/LyricsEngineView.swift` | Rendu des paroles via le moteur C++ | — (reçoit `lyricsStore`/`currentTime`) | Intégrée dans FullScreenPlayerView |
+| `LyricsEngineView` | `Views/Player/FullScreenPlayer/LyricsEngineView.swift` | Rendu des paroles via le moteur C++ | — (reçoit `lyrics: [LyricsLine]`/`currentTime`, délègue le rendu à l'acteur `LyricsRenderEngine`) | Intégrée dans FullScreenPlayerView, dans un `TimelineView(.animation(paused:))` |
 | `MiniPlayerBar` | `Views/Player/MiniPlayerBar/MiniPlayerBar.swift` | Mini-lecteur compact/étendu (iOS uniquement) | — (lit `PlayerState`) | `.tabViewBottomAccessory` |
 | `MiniPlayerBarTV` | `Views/Player/MiniPlayerBar/MiniPlayerBarTV.swift` | Équivalent tvOS, carte focusable | — (lit `PlayerState`) | `.overlay` + `.focusSection()` |
 
@@ -228,15 +228,15 @@ Aucune occurrence de `Task.detached`, `@unchecked Sendable` ou `nonisolated(unsa
 
 | Stratégie | Utilisée pour | Exemples |
 |---|---|---|
-| `@MainActor @Observable final class` | ViewModels + état UI partagé | `FullScreenPlayerViewModel`, `LibraryViewModel`, `SongDownloadViewModel`, `SongOptionsViewModel`, `PlayerState` |
-| `actor` | Repository avec état mutable partagé | `CachedLyricsRepository` (cache), `InMemoryDownloadedSongsRepository` (liste) |
-| `nonisolated struct/protocol : Sendable` | Domain (UseCases, protocoles, mapper), Service sans état | `FetchLyricsUseCase`, `LyricsRepository` (protocole), `LyricsMapper`, `URLSessionLyricsFetching` |
+| `@MainActor @Observable final class` | ViewModels + état UI partagé | `FullScreenPlayerViewModel`, `LibraryViewModel`, `SongDownloadViewModel`, `SongOptionsViewModel`, `PlayerState`, `PlaybackClock` |
+| `actor` | Repository avec état mutable partagé, ou état hors-UI qui ne doit pas bloquer le thread principal | `CachedLyricsRepository` (cache), `InMemoryDownloadedSongsRepository` (liste), `LyricsRenderEngine` (moteur C++ persistant — voir §9) |
+| `nonisolated struct/protocol : Sendable` | Domain (UseCases, protocoles, mapper), Service sans état, DTO traversant une frontière d'acteur | `FetchLyricsUseCase`, `LyricsRepository` (protocole), `LyricsMapper`, `URLSessionLyricsFetching`, `LyricsLinePayload`/`RenderedFrame` |
 | Valeur immuable (`let` uniquement) | Modèles domaine | `Song`, `Playlist`, `LyricsLine`, `LyricsError` |
 | `Task { }` structuré, référence conservée | Travail asynchrone annulable depuis un ViewModel | `SongDownloadViewModel.downloadTask: Task<Void, Never>?`, annulé dans `cancelDownload()` |
 | `Task { }` interne à un flux | Pont entre un service générateur et un `AsyncThrowingStream` | `DownloadSongUseCase.callAsFunction`, `SimulatedSongDownloading.download` |
-| `.task { }` (modifier SwiftUI) | Déclenchement asynchrone lié au cycle de vie d'une vue | `LyricsEngineView` (chargement police), `LibraryView` (`refresh()`), `SongOptionsSheet` (résolution DI paramétrée) |
+| `.task { }` (modifier SwiftUI) | Déclenchement asynchrone lié au cycle de vie d'une vue | `LyricsEngineView` (chargement police + paroles + rendu coalescé, 3 `.task` distincts), `LibraryView` (`refresh()`), `SongOptionsSheet` (résolution DI paramétrée) |
 
-Cette carte donne la règle de conception implicite du projet, documentée aussi dans `docs/swift6-isolation-bonnes-pratiques.md` : **`@MainActor` réservé à ce qui pilote directement l'UI ; tout le reste (Domain, Repository, Service) reste `nonisolated` ou isolé dans son propre `actor`.** Un Repository n'est jamais `@MainActor` — décision explicitement corrigée par Nicolas tôt dans le projet (voir `learning-records/0004-repository-ne-doit-pas-etre-mainactor.md`) : un Repository fait de l'I/O et ne doit jamais bloquer le thread principal.
+Cette carte donne la règle de conception implicite du projet, documentée aussi dans `docs/swift6-isolation-bonnes-pratiques.md` : **`@MainActor` réservé à ce qui pilote directement l'UI ; tout le reste (Domain, Repository, Service) reste `nonisolated` ou isolé dans son propre `actor`.** Un Repository n'est jamais `@MainActor` — décision explicitement corrigée par Nicolas tôt dans le projet (voir `learning-records/0004-repository-ne-doit-pas-etre-mainactor.md`) : un Repository fait de l'I/O et ne doit jamais bloquer le thread principal. `LyricsRenderEngine` (§9) applique la même règle à un nouveau cas : un moteur de rendu qui fait un travail CPU non négligeable ne doit pas non plus tourner sur `@MainActor`, même s'il ne fait aucune I/O.
 
 ---
 
@@ -258,34 +258,56 @@ Depuis la Leçon 35 (interop Swift/C++), l'affichage des paroles n'est plus gér
   ```
 - Côté Swift : `import CxxStdlib`, tous les types C++ accessibles sous le namespace `karamock.*` (ex. `karamock.LyricsStore()`), toute `String` Swift passée à un `std::string` nécessite un cast explicite `std.string(_:)`.
 
-### Pipeline de rendu
+### Pipeline de rendu (depuis le 10 août 2026 : rendu hors MainActor)
+
+Le rendu ne tourne plus sur le thread principal. `LyricsRenderEngine` (`Engine/LyricsRenderEngine.swift`) est un **`actor`** Swift qui possède, de façon persistante d'une frame à l'autre, l'intégralité de l'état C++ du moteur (`Font`, `LyricsStore`, `TextRenderer`, `LyricsPage`, `PixelBuffer`) — plus aucun de ces objets n'est reconstruit à chaque rendu. `LyricsEngineView`, elle, reste `@MainActor` (comme toute vue SwiftUI) mais ne fait plus le rendu elle-même : elle envoie une requête à l'acteur et n'échange avec lui que des types `Sendable`.
 
 ```mermaid
 flowchart LR
-    Store["LyricsStore\n(C++, paroles horodatées)"] --> Page["LyricsPage::render\n(C++, mise en page + transition)"]
-    Font["Font\n(C++, stb_truetype, pimpl move-only)"] --> Page
-    Page --> Renderer["TextRenderer\n(C++, rasterisation glyphe par glyphe)"]
-    Renderer --> Buffer["PixelBuffer\n(C++, RGBA8 brut)"]
-    Buffer --> CG["CGImage\n(Swift, CGDataProvider + sRGB)"]
-    CG --> View["Image(decorative:)\ndans LyricsEngineView"]
+    subgraph MainActor["MainActor — LyricsEngineView"]
+        Req["FrameRequest\n(temps, taille en pixels)"]
+        Img["image: CGImage?"]
+    end
+    subgraph Actor["actor LyricsRenderEngine — hors MainActor"]
+        Store["LyricsStore"] --> Page["LyricsPage::render"]
+        FontC["Font"] --> Page
+        Page --> Renderer["TextRenderer\n(cache de glyphes)"]
+        Renderer --> Buffer["PixelBuffer\n(pooling de capacité)"]
+        Buffer -->|copyPixels, memcpy| Frame["RenderedFrame\n(Data Sendable)"]
+    end
+    Req -->|"await engine.frame(...)"| Actor
+    Frame -->|retour Sendable| Img
 ```
 
 | Composant | Fichier(s) | Rôle |
 |---|---|---|
-| `LyricsStore` | `Engine/LyricsStore.hpp/.cpp` | Collection `LyricLine{time, text}` horodatée. `textAt`/`indexAtTime` (recherche binaire `std::upper_bound`, sentinel `npos`) permettent de retrouver la ligne active pour un instant donné. `addLine` vérifie (`assert`) que les temps sont croissants. |
-| `Font` | `Engine/Font.hpp/.cpp` | Pimpl autour de `stbtt_fontinfo` (stb_truetype). **Move-only** (`Font(const Font&) = delete`) — les octets `.ttf` et la structure qui pointe dedans doivent rester dans le même objet, jamais copiés séparément. |
-| `TextRenderer` | `Engine/TextRenderer.hpp/.cpp` | Rastérise chaque glyphe (masque de couverture 8 bits) dans un buffer temporaire, puis le mélange (alpha blend) dans le `PixelBuffer` cible. `measureWidth` refait le même calcul d'avancement sans rastériser, pour le centrage. |
-| `PixelBuffer` | `Engine/PixelBuffer.hpp/.cpp` | Buffer RGBA8 brut : `resize`, `fill`, `blendPixel` (avec clipping silencieux hors bornes). |
-| `LyricsPage` | `Engine/LyricsPage.hpp/.cpp` | Compose les quatre briques ci-dessus : trouve la ligne active, dessine trois lignes (active centrée en grand, voisines réduites et assombries), et **lisse la transition de position** entre deux lignes sans aucun état mutable — la progression de la transition est recalculée à chaque appel depuis `currentTime - lyrics.timeAt(active)` (durée `0.5s`, `easeOutCubic`), jamais mémorisée d'un appel à l'autre. |
-| `LyricsEngineView` | `Views/Player/FullScreenPlayer/LyricsEngineView.swift` | Vue SwiftUI hôte : charge la police une fois (`fontData` en `@State`), mesure sa taille réelle via `onGeometryChange`, appelle `LyricsPage::render` et convertit le `PixelBuffer` résultant en `CGImage` (`CGDataProvider` + espace `sRGB` + `CGImageByteOrderInfo.order32Big`). |
+| `LyricsRenderEngine` | `Engine/LyricsRenderEngine.swift` | **`actor`**, hors MainActor. Possède l'état C++ persistant (`font`, `store`, `renderer`, `page`, `buffer`, réutilisés d'un appel à l'autre). `loadFontIfNeeded`, `setLyrics([LyricsLinePayload])`, `frame(at:pixelWidth:pixelHeight:) -> RenderedFrame?` — seule méthode qui rastérise, retourne un DTO `Sendable`, jamais un pointeur ou un type C++. |
+| `LyricsLinePayload` / `RenderedFrame` | `Domain/DTO/LyricsRenderTypes.swift` | `nonisolated struct : Sendable`. Les seuls types qui traversent la frontière d'acteur `LyricsEngineView` ↔ `LyricsRenderEngine` — `Data`/`Int`/`Double`/`String` uniquement, jamais un `karamock.*` (les types C++ ne franchissent jamais cette frontière). |
+| `LyricsStore` | `Engine/LyricsStore.hpp/.cpp` | Collection `LyricLine{time, text}` horodatée, propriété de l'acteur. `textAt`/`indexAtTime` (recherche binaire `std::upper_bound`, sentinel `npos`). `addLine` vérifie (`assert`) que les temps sont croissants. |
+| `Font` | `Engine/Font.hpp/.cpp` | Pimpl autour de `stbtt_fontinfo` (stb_truetype). **Move-only** (`Font(const Font&) = delete`) — chargée une fois (`loadFontIfNeeded`), vit dans l'acteur pour toute la durée de vie de la vue. |
+| `TextRenderer` | `Engine/TextRenderer.hpp/.cpp` | **Cache de glyphes** (`glyphCache_: unordered_map<uint64_t, CachedGlyph>`, clé = codepoint + hauteur en pixels arrondie) — un glyphe n'est rastérisé (`stbtt_MakeCodepointBitmap`) qu'une seule fois, puis relu depuis le cache à chaque frame suivante. `hmetricsCache_` (`mutable`) fait de même pour les métriques utilisées par `measureWidth` (`const`). |
+| `PixelBuffer` | `Engine/PixelBuffer.hpp/.cpp` | Buffer RGBA8. `resize` ne réalloue que si la capacité existante est insuffisante (pooling) plutôt que de désallouer/réallouer à chaque frame. `copyPixels(dest, capacity)` copie le contenu par `memcpy` **à l'intérieur du C++**, où `pixels_` reste valide — remplace un accès direct au pointeur brut `__dataUnsafe()` qui provoquait un use-after-free (voir plus bas). |
+| `LyricsPage` | `Engine/LyricsPage.hpp/.cpp` | Inchangée depuis la Leçon 41 : trouve la ligne active, dessine trois lignes avec transition de position lissée (`easeOutCubic`, `0.5s`), sans état mutable propre. |
+| `LyricsEngineView` | `Views/Player/FullScreenPlayer/LyricsEngineView.swift` | `@State private var engine = LyricsRenderEngine()`. Construit une `FrameRequest` (temps en ms, taille en pixels) à partir de `currentTime`/`size`/`displayScale`, et l'envoie via `.task(id: request)`. Rendu **coalescé** (voir plus bas). `Image(...).resizable()` pour occuper toute la largeur mesurée. |
+| `PlaybackClock` | `Views/Player/FullScreenPlayer/PlaybackClock.swift` | `@MainActor @Observable`, hors du moteur C++. Horloge continue ancrée sur `CACurrentMediaTime()` (`anchorMedia`/`anchorHost`) plutôt qu'un compteur avancé par pas de 0,5s — `currentTime()` interpole en continu entre deux resynchronisations (`sync(to:running:)`, appelée au démarrage, à play/pause, et sur scrub manuel). |
 
-Le buffer est reconstruit et rastérisé entièrement à chaque changement de `currentTime` (poussé par le minuteur de lecture simulé existant dans `FullScreenPlayerView`, pas par une horloge propre au moteur — voir Leçon 42) : pas de cache de glyphes ni de rendu incrémental à ce stade (voir §13, audit de performance).
+**D'où vient `currentTime` maintenant** : `FullScreenPlayerView` enveloppe `LyricsEngineView` dans un `TimelineView(.animation(minimumInterval: nil, paused: !player.isPlaying))`, qui redessine au rythme d'affichage de l'appareil (pas un minuteur à 0,5s) et lui passe `min(clock.currentTime(), song.durationInSeconds)`. Le `Timer.publish(every: 0.5)` existe toujours dans `FullScreenPlayerView`, mais ne sert plus qu'à faire progresser `progress` (le slider affiché) et à détecter la fin de piste — la fluidité visuelle du moteur ne dépend plus de lui.
+
+**Rendu coalescé** (`LyricsEngineView.renderCurrent()`) : un seul appel `await engine.frame(...)` en vol à la fois. Si un nouveau tick de `TimelineView` arrive pendant qu'un rendu est déjà en cours, sa requête remplace simplement `pendingRequest` (la plus récente l'emporte) plutôt que d'empiler un nouvel appel sur la boîte aux lettres FIFO de l'acteur — sans ça, un acteur plus lent que la cadence des ticks accumule un backlog croissant et le rendu affiché prend un retard grandissant sur le temps réel.
+
+### Bug corrigé : use-after-free sur `__dataUnsafe()`
+
+Avant le correctif du 10 août 2026, le premier jet du rendu par acteur récupérait le buffer via `buffer.__dataUnsafe()` puis le copiait dans une `Data` Swift — sûr en synchrone (Leçons 37-42), mais devenu un **use-after-free** une fois `PixelBuffer` manipulé à travers l'interop asynchrone de l'acteur : le buffer C++ pouvait être matérialisé comme temporaire et détruit en fin d'instruction avant que la copie ne soit terminée, provoquant un crash `EXC_BAD_ACCESS`. Corrigé en ajoutant `PixelBuffer::copyPixels(uint8_t* destination, size_t capacity) const`, qui fait le `memcpy` **entièrement à l'intérieur du C++** (où `pixels_` est garanti valide) — plus aucun pointeur brut ne traverse la frontière Swift/C++ pour ce buffer. Rappel utile : ce n'est pas un problème du pattern `__dataUnsafe()` lui-même (toujours valide en appel synchrone direct), mais de sa combinaison avec l'asynchronisme d'un acteur — un rappel que les invariants "sûrs en synchrone" doivent être revérifiés dès qu'un `await` s'intercale.
+
+### Point d'attention introduit par le pooling de `PixelBuffer`
+
+`sizeInBytes()` (`= pixels_.size()`) **n'est plus garanti égal à `width() * height() * 4`** après un rétrécissement de frame qui suit un frame plus grand : `resize()` ne réalloue (et donc ne met à jour `pixels_.size()`) que si la capacité existante est insuffisante — en cas de rétrécissement, la capacité reste suffisante, `resize()` ne fait rien, et `pixels_.size()` garde sa valeur précédente (plus grande). Aucun bug visible aujourd'hui : le seul appelant (`LyricsRenderEngine.frame()`) combine toujours `sizeInBytes()` avec `width()`/`height()`/`bytesPerRow()` (issus de `width_`/`height_`, eux toujours à jour) pour construire le `CGImage`, donc l'excédent de mémoire copié n'est jamais lu au-delà des dimensions réelles. Mais tout futur appelant qui supposerait `sizeInBytes() == width()*height()*4` obtiendrait une valeur obsolète après un rétrécissement — à garder en tête avant d'ajouter un nouveau consommateur de `PixelBuffer`.
 
 ### Points d'attention interop Swift/C++ (récurrents dans le code)
 
 - `Int`/`Int32` : une valeur Swift `Int` non littérale doit être castée explicitement en `Int32` pour un paramètre C++ `int` ; un littéral entier se convertit implicitement.
 - `Double` : contrairement à `Int`, un `Double` Swift (littéral ou non) se convertit directement vers/depuis un `double` C++, sans cast.
-- Une méthode C++ retournant un pointeur dans `this` (ex. `PixelBuffer::data()`) est renommée côté Swift en `__dataUnsafe()` (`UnsafePointer<T>!`) — toujours copiée immédiatement dans une `Data` Swift, jamais retenue telle quelle.
+- Un type C++ (`karamock.Font`, `karamock.PixelBuffer`...) ne doit jamais traverser une frontière d'acteur/async directement — seuls des types `Sendable` purement Swift (`Data`, `Int`, `String`...) le peuvent, comme le montre `RenderedFrame`.
 - `std::vector`/conteneurs C++ lus depuis Swift n'ont aucune garantie de performance documentée (copie profonde possible) — le moteur ne construit donc jamais de `std::vector` côté Swift ; c'est le C++ qui possède ses propres conteneurs, alimentés ligne par ligne (`addLine`).
 
 ---
@@ -344,8 +366,10 @@ Explicitement acté dans `MISSION.md` — pas des oublis :
 
 Limites techniques réelles, découvertes et documentées au fil des leçons plutôt que dans `MISSION.md` :
 
-- **Texte ASCII uniquement** : `TextRenderer` itère `std::string` octet par octet (`unsigned char`), pas codepoint Unicode — un caractère accentué UTF-8 multi-octets (é, è, à...) produit un glyphe cassé. Non traité à ce stade, problème réel pour des paroles françaises.
-- **Canvas vide pendant le chargement** : entre le début du chargement d'un écran lecteur et la fin de `FullScreenPlayerViewModel.loadLyrics()`, `lyricsStore` est vide (`LyricsPage::render` ne dessine rien, `indexAtTime` renvoie `npos`) — fenêtre courte mais réelle, non comblée.
-- **Audit de performance existant mais mis de côté** (`audits/2026-08-08-cpp-engine-performance-audit.md`) : identifie un rendu synchrone sur le thread principal à chaque tick comme point réel à traiter, mais plusieurs de ses chiffrages (réallocations `std::vector::assign`, complexité "O(n²)", solution de cache `Font` en `@State`) se sont révélés inexacts ou en contradiction avec des contraintes déjà vérifiées (voir relecture critique du 9 août 2026) — à corriger avec des mesures réelles (Instruments), pas avec les chiffres de cet audit tels quels.
+- **Texte ASCII uniquement** : `TextRenderer` itère toujours `std::string` octet par octet (`unsigned char`), pas codepoint Unicode — un caractère accentué UTF-8 multi-octets (é, è, à...) produit un glyphe cassé. Non traité par le batch de correctifs du 10 août 2026 (qui a porté sur la performance, pas l'Unicode) — toujours un problème réel pour des paroles françaises.
+- **`sizeInBytes()` potentiellement obsolète après un rétrécissement de frame** (voir §9) : conséquence du pooling introduit le 10 août 2026 sur `PixelBuffer::resize`. Sans conséquence visible aujourd'hui, mais un piège pour un futur appelant qui ferait l'hypothèse `sizeInBytes() == width()*height()*4`.
+- **`FullScreenPlayerViewModel.lyricsStore` et `sendLyricsToEngine()` devenus du code mort** : depuis que `LyricsEngineView` reçoit directement `lyrics: [LyricsLine]` et construit son propre `karamock.LyricsStore` à l'intérieur de l'acteur `LyricsRenderEngine` (`setLyrics`), plus rien ne lit `viewModel.lyricsStore`. À supprimer par cohérence — même risque de confusion "quel LyricsStore fait autorité" déjà signalé pour `LyricsView.swift` en Leçon 42.
 - **`KaramockTests` en Swift 5.0** alors que la target app est en Swift 6.0 — les tests ne bénéficient pas de la même vérification stricte de concurrence que le code qu'ils testent.
 - **Dépendance Factory non figée** (suivie sur `main`, pas un tag de version) — un risque de dérive silencieuse de comportement à une mise à jour.
+
+**Résolu depuis la rédaction initiale de ce document (11 août 2026)** — le batch de correctifs de performance du 10 août 2026 (`learning-records/2026-08-10-fix-*.md`) a traité, avec des résultats corrects et vérifiés dans le code, trois points identifiés par l'audit du 8 août 2026 (`audits/2026-08-08-cpp-engine-performance-audit.md`) : rendu déplacé hors MainActor dans un `actor` dédié (§9), cache de glyphes dans `TextRenderer` (§9), pooling de capacité dans `PixelBuffer::resize` (§9, avec une réserve — voir ci-dessus). Le correctif du rendu hors MainActor a d'ailleurs confirmé, en le résolvant correctement, le point que la relecture critique du 9 août 2026 avait anticipé : la solution de l'audit (`Task.detached` capturant des types C++ non-`Sendable`) n'aurait pas compilé telle quelle sous Swift 6 strict concurrency — la solution réellement adoptée (un `actor` persistant, ne faisant traverser que des DTO `Sendable`) contourne ce problème par construction. Au passage, ce même batch a aussi corrigé un vrai use-after-free introduit pendant son propre développement (§9) et le rendu non pleine-largeur du canvas — et, effet de bord positif, le "canvas vide pendant le chargement" documenté dans une version précédente de ce paragraphe a disparu : `LyricsEngineView` reçoit maintenant `viewModel?.lyrics ?? placeholderLyrics`, qui affiche toujours un contenu (paroles réelles ou repli), jamais un canvas vide.
