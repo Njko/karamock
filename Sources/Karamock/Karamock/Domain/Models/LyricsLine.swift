@@ -14,10 +14,10 @@ struct LyricsLine : Identifiable, Hashable {
 }
 
 let placeholderLyrics: [LyricsLine] = [
-    LyricsLine(time: 0, text: "Première ligne des paroles simulées"),
+    LyricsLine(time: 0, text: "Premiere ligne des paroles simulees"),
     LyricsLine(time: 4, text: "Chaque ligne a son propre horodatage"),
     LyricsLine(time: 8, text: "Le refrain arrive dans quelques secondes"),
     LyricsLine(time: 12, text: "On surligne la ligne courante en la comparant au temps"),
-    LyricsLine(time: 16, text: "Et on fait défiler la vue jusqu'à elle"),
-    LyricsLine(time: 20, text: "Sans jamais stocker \"quelle ligne est active\" à part"),
+    LyricsLine(time: 16, text: "Et on fait defiler la vue jusqu'a elle"),
+    LyricsLine(time: 20, text: "Sans jamais stocker \"quelle ligne est active\" a part"),
 ]

@@ -121,6 +121,8 @@ struct FullScreenPlayerView: View {
 }
 
 #Preview {
-    FullScreenPlayerView(song: Song(title: "Year of the cat", artist: "Cat Stevens", year: 1986, duration: "3:33", key: "A"))
-        .environment(PlayerState())
+    Container.shared.fetchLyrics {
+        .init(repository: MockLyricsRepository())
+    }
+    return FullScreenPlayerView(song: Song(title: "Year of the cat", artist: "Cat Stevens", year: 1986, duration: "3:33", key: "A"))
 }

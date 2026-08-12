@@ -13,6 +13,10 @@ extension Container {
         self { URLSessionLyricsFetching() }
     }
     
+    var songDownloading: Factory<SongDownloading> {
+        self { SimulatedSongDownloading() }
+    }
+    
     var lyricsRepository: Factory<LyricsRepository> {
         self { CachedLyricsRepository(service: self.lyricsFetching()) }
             .singleton
@@ -23,10 +27,6 @@ extension Container {
             .singleton
     }
     
-    var songDownloading: Factory<SongDownloading> {
-        self { SimulatedSongDownloading() }
-    }
-
     // Domain
     var fetchLyrics: Factory<FetchLyricsUseCase> {
         self { FetchLyricsUseCase(repository: self.lyricsRepository()) }
