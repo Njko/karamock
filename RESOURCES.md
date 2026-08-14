@@ -28,6 +28,10 @@
   Doc officielle — défilement programmatique, utilisé en Leçon 5 pour synchroniser l'affichage des paroles avec la progression simulée.
 - [Apple Developer: `Timer.TimerPublisher`](https://developer.apple.com/documentation/foundation/timer/timerpublisher)
   Doc officielle Combine — base de la simulation de progression de lecture en Leçon 5.
+- [WWDC26 — Profile, fix, and verify: Improve app responsiveness with Instruments](https://developer.apple.com/videos/play/wwdc2026/268/)
+  Session la plus récente d'Apple sur la méthode de profiling avec Instruments — méthode de vérification recommandée dans `audits/2026-08-14-guide-migration-performance.md` pour confirmer le budget par frame après correctifs, plutôt que de le deviner à la lecture du code.
+- [cppreference — `std::vector::resize`](https://en.cppreference.com/cpp/container/vector/resize)
+  Confirme que la capacité d'un `std::vector` n'est jamais réduite lors d'un rétrécissement — cause racine du bug `PixelBuffer::sizeInBytes()` traité dans `audits/2026-08-14-guide-migration-performance.md`.
 
 ## Wisdom (Communities)
 
